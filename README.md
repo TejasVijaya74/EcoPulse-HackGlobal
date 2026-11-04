@@ -192,3 +192,7 @@ npm audit
 - **Synthetic weather appears:** Set valid coordinates and an IANA `WEATHER_TIMEZONE`, then wait for the failure cache to expire (up to one minute) or restart the backend. Weather API errors automatically fall back.
 - **Local PowerShell blocks activation:** Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then activate `.venv`; or invoke `.venv\Scripts\python.exe` directly.
 - **Forecast page lacks model scores:** Call `POST /api/v1/model/train`; this saves training metadata used by the forecast page.
+
+
+## Live Demo
+Experience EcoPulse live: [Open EcoPulse Dashboard](https://ecopulse-frontend-p55z.onrender.com/)
