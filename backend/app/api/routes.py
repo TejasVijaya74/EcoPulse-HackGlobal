@@ -93,6 +93,7 @@ def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_d
         parameters_json=json.dumps(result["parameters"]),
         result_json=json.dumps(result),
     )
+    database_operation = "insert_simulation_record"
     try:
         db.add(record)
         db.flush()
@@ -113,13 +114,36 @@ def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_d
                         transaction_type="community_contribution",
                     )
                 )
+        database_operation = "commit_simulation_and_credit_transactions"
         db.commit()
     except SQLAlchemyError as exc:
-        logger.exception("Could not persist simulation and credit transactions.")
+        logger.exception(
+            "Simulation persistence failed endpoint=%s exception_class=%s database_operation=%s",
+            "/api/v1/simulate",
+            type(exc).__name__,
+            database_operation,
+            extra={
+                "endpoint": "/api/v1/simulate",
+                "exception_class": type(exc).__name__,
+                "database_operation": database_operation,
+            },
+        )
         try:
             db.rollback()
-        except SQLAlchemyError:
-            logger.exception("Rollback failed after simulation persistence error.")
+        except SQLAlchemyError as rollback_exc:
+            logger.exception(
+                "Rollback failed endpoint=%s exception_class=%s original_exception_class=%s database_operation=%s",
+                "/api/v1/simulate",
+                type(rollback_exc).__name__,
+                type(exc).__name__,
+                "rollback_simulation_and_credit_transactions",
+                extra={
+                    "endpoint": "/api/v1/simulate",
+                    "exception_class": type(rollback_exc).__name__,
+                    "original_exception_class": type(exc).__name__,
+                    "database_operation": "rollback_simulation_and_credit_transactions",
+                },
+            )
         raise HTTPException(
             status_code=500,
             detail="Simulation could not be saved. No simulation or credit transactions were committed.",

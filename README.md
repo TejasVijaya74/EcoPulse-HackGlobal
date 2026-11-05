@@ -166,9 +166,10 @@ Render currently offers free Static Sites, Web Services, and Postgres databases 
 ```powershell
 $env:DATABASE_URL = "<Render PostgreSQL external connection URL>"
 psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f .\backend\migrations\versions\20261105_01_expand_credit_transaction_type.sql
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -c "SELECT current_database(), table_schema, column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'credit_transactions' AND column_name = 'transaction_type';"
 ```
 
-Use the database's external connection URL privately from your workstation (or another PostgreSQL client); do not put it in source control or chat. The SQL widens `credit_transactions.transaction_type` to `VARCHAR(40)` and does not delete or rewrite application rows. The new backend model matches the migrated schema. Fresh databases get the new width automatically from SQLAlchemy metadata.
+Use the database's external connection URL privately from your workstation (or another PostgreSQL client); do not put it in source control or chat. Verify the query returns `character_maximum_length = 40`. The SQL widens `credit_transactions.transaction_type` to `VARCHAR(40)` and does not delete or rewrite application rows. The new backend model matches the migrated schema. Fresh databases get the new width automatically from SQLAlchemy metadata.
 
 ### WebSocket, health, and model behavior
 
