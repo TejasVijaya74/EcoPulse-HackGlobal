@@ -1,8 +1,10 @@
 import json
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.config import DEFAULT_CONFIG
@@ -16,6 +18,7 @@ from app.services.analytics import create_dashboard_preview, dashboard_from_resu
 from app.services.weather import get_hourly_weather
 
 router = APIRouter(prefix="/api/v1")
+logger = logging.getLogger(__name__)
 
 
 def current_config(db: Session) -> dict:
@@ -90,26 +93,37 @@ def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_d
         parameters_json=json.dumps(result["parameters"]),
         result_json=json.dumps(result),
     )
-    db.add(record)
-    db.flush()
-    total_energy = result["metrics"]["community_contribution_kwh"]
-    total_credits = result["metrics"]["community_credits"]
-    households = max(1, result["parameters"]["households"])
-    now = datetime.now(timezone.utc)
-    for index in range(households):
-        energy_share = total_energy / households
-        if energy_share > 0:
-            db.add(
-                CreditTransaction(
-                    timestamp=now,
-                    simulation_id=record.id,
-                    household_id=f"HH-{index + 1:03d}",
-                    energy_kwh=energy_share,
-                    credits=total_credits / households,
-                    transaction_type="community_contribution",
+    try:
+        db.add(record)
+        db.flush()
+        total_energy = result["metrics"]["community_contribution_kwh"]
+        total_credits = result["metrics"]["community_credits"]
+        households = max(1, result["parameters"]["households"])
+        now = datetime.now(timezone.utc)
+        for index in range(households):
+            energy_share = total_energy / households
+            if energy_share > 0:
+                db.add(
+                    CreditTransaction(
+                        timestamp=now,
+                        simulation_id=record.id,
+                        household_id=f"HH-{index + 1:03d}",
+                        energy_kwh=energy_share,
+                        credits=total_credits / households,
+                        transaction_type="community_contribution",
+                    )
                 )
-            )
-    db.commit()
+        db.commit()
+    except SQLAlchemyError as exc:
+        logger.exception("Could not persist simulation and credit transactions.")
+        try:
+            db.rollback()
+        except SQLAlchemyError:
+            logger.exception("Rollback failed after simulation persistence error.")
+        raise HTTPException(
+            status_code=500,
+            detail="Simulation could not be saved. No simulation or credit transactions were committed.",
+        ) from exc
     result["id"] = record.id
     result["created_at"] = record.created_at.isoformat()
     return result

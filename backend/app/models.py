@@ -37,7 +37,7 @@ class CreditTransaction(Base):
     household_id: Mapped[str] = mapped_column(String(40), index=True)
     energy_kwh: Mapped[float] = mapped_column(Float)
     credits: Mapped[float] = mapped_column(Float)
-    transaction_type: Mapped[str] = mapped_column(String(20))
+    transaction_type: Mapped[str] = mapped_column(String(40))
 
 
 class ModelTrainingRecord(Base):
@@ -47,4 +47,3 @@ class ModelTrainingRecord(Base):
     trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
     metrics_json: Mapped[str] = mapped_column(Text)
     samples: Mapped[int] = mapped_column(Integer)
-

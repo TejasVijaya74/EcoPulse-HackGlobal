@@ -1,6 +1,29 @@
+from sqlalchemy import event
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session as OrmSession
 from fastapi.testclient import TestClient
 
+from app.database import SessionLocal
 from app.main import app
+from app.models import CreditTransaction, SimulationRecord
+
+
+def grid_outage_payload():
+    return {
+        "scenario": "grid_outage",
+        "households": 2,
+        "solar_capacity_kw": 30,
+        "storage_capacity_kwh": 5,
+        "initial_storage_percent": 50,
+        "grid_import_limit_kw": 100,
+        "grid_export_limit_kw": 10,
+        "cloud_cover": 0.6,
+        "temperature_c": 22,
+        "demand_multiplier": 1,
+        "grid_available": False,
+        "duration_hours": 24,
+        "random_seed": 4,
+    }
 
 
 def test_health_and_forecast_api():
@@ -31,22 +54,7 @@ def test_health_and_forecast_api():
 
 def test_simulation_is_saved_and_creates_credit_ledger_entries():
     with TestClient(app) as client:
-        payload = {
-            "scenario": "grid_outage",
-            "households": 2,
-            "solar_capacity_kw": 30,
-            "storage_capacity_kwh": 5,
-            "initial_storage_percent": 50,
-            "grid_import_limit_kw": 100,
-            "grid_export_limit_kw": 10,
-            "cloud_cover": 0.6,
-            "temperature_c": 22,
-            "demand_multiplier": 1,
-            "grid_available": False,
-            "duration_hours": 24,
-            "random_seed": 4,
-        }
-        response = client.post("/api/v1/simulate", json=payload)
+        response = client.post("/api/v1/simulate", json=grid_outage_payload())
         assert response.status_code == 200, response.text
         result = response.json()
         assert result["id"]
@@ -61,10 +69,43 @@ def test_simulation_is_saved_and_creates_credit_ledger_entries():
             item for item in ledger["transactions"] if item["simulation_id"] == result["id"]
         ]
         assert len(simulation_transactions) == 2
+        assert all(item["transaction_type"] == "community_contribution" for item in simulation_transactions)
         assert abs(
             sum(item["credits"] for item in simulation_transactions)
             - result["metrics"]["community_credits"]
         ) <= 0.02
+
+
+def test_credit_transaction_type_column_fits_generated_value():
+    transaction_type = "community_contribution"
+    column = CreditTransaction.__table__.c.transaction_type
+
+    assert len(transaction_type) == 22
+    assert len(transaction_type) > 20
+    assert column.type.length == 40
+    assert len(transaction_type) <= column.type.length
+
+
+def test_simulation_persistence_failure_rolls_back_all_rows():
+    with TestClient(app, raise_server_exceptions=False) as client:
+        with SessionLocal() as db:
+            simulations_before = db.query(SimulationRecord).count()
+            credits_before = db.query(CreditTransaction).count()
+
+        def fail_commit(_session):
+            raise SQLAlchemyError("injected commit failure")
+
+        event.listen(OrmSession, "before_commit", fail_commit)
+        try:
+            response = client.post("/api/v1/simulate", json=grid_outage_payload())
+        finally:
+            event.remove(OrmSession, "before_commit", fail_commit)
+
+        assert response.status_code == 500
+        assert "No simulation or credit transactions were committed" in response.json()["detail"]
+        with SessionLocal() as db:
+            assert db.query(SimulationRecord).count() == simulations_before
+            assert db.query(CreditTransaction).count() == credits_before
 
 
 def test_simulation_uses_saved_config_and_explicit_parameters_override_it():

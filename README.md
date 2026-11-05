@@ -159,6 +159,17 @@ Use the Blueprint-linked `DATABASE_URL` and keep the database and backend in the
 
 Render currently offers free Static Sites, Web Services, and Postgres databases for experimentation. Free Web Services spin down after 15 minutes without inbound traffic and typically take about a minute to wake. Their filesystem is ephemeral, so local SQLite data and model files are not durable there; the PostgreSQL service is required for simulation persistence. Free Render Postgres has a fixed 1 GB limit, expires 30 days after creation, has no backups, and is deleted after its 14-day post-expiry grace period unless upgraded. Free services are not recommended for production. See Render's current [free instance limitations](https://render.com/docs/free) before choosing a plan.
 
+### Applying PostgreSQL migrations
+
+`Base.metadata.create_all()` creates missing tables but does not alter existing columns. Before deploying the simulation persistence fix to a database that already has the original `VARCHAR(20)` credit type column, apply this additive, data-preserving migration once:
+
+```powershell
+$env:DATABASE_URL = "<Render PostgreSQL external connection URL>"
+psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f .\backend\migrations\versions\20261105_01_expand_credit_transaction_type.sql
+```
+
+Use the database's external connection URL privately from your workstation (or another PostgreSQL client); do not put it in source control or chat. The SQL widens `credit_transactions.transaction_type` to `VARCHAR(40)` and does not delete or rewrite application rows. The new backend model matches the migrated schema. Fresh databases get the new width automatically from SQLAlchemy metadata.
+
 ### WebSocket, health, and model behavior
 
 The frontend uses `wss://` for the deployed `/ws/grid-telemetry` endpoint. A WebSocket failure falls back to REST dashboard polling. Verify the backend at `https://<backend-name>.onrender.com/api/v1/health` and the API docs at `/docs`. Free backend spin-down can delay the first request and WebSocket connection. Model artifacts are stored on the service filesystem and therefore may be retrained at startup after a fresh deploy or restart; trained models are reused for subsequent requests in that process.
