@@ -50,23 +50,25 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(
+fastapi_app = FastAPI(
     title="EcoPulse Energy Management API",
     description="Local predictive neighborhood energy and abstract flywheel simulation. All values are simulated.",
     version="1.0.0",
     lifespan=lifespan,
 )
-app.add_middleware(
-    CORSMiddleware,
+fastapi_app.include_router(router)
+fastapi_app.include_router(websocket_router)
+
+# Wrap the complete FastAPI app so CORS headers are added to unhandled error responses too.
+app = CORSMiddleware(
+    app=fastapi_app,
     allow_origins=list(CORS_ORIGINS),
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
-app.include_router(router)
-app.include_router(websocket_router)
 
 
-@app.get("/")
+@fastapi_app.get("/")
 def root() -> dict:
     return {"name": "EcoPulse", "status": "running", "docs": "/docs", "simulated": True}

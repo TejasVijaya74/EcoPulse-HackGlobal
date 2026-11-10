@@ -17,7 +17,10 @@ API_PORT = int(os.getenv("API_PORT", "8000"))
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 CORS_ORIGINS = tuple(
     origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", f"{FRONTEND_ORIGIN},http://127.0.0.1:5173").split(",")
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        f"{FRONTEND_ORIGIN},http://127.0.0.1:5173,https://ecopulse-frontend-p55z.onrender.com",
+    ).split(",")
     if origin.strip()
 )
 WEATHER_LATITUDE = os.getenv("WEATHER_LATITUDE", "").strip()

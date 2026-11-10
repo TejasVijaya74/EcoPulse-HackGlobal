@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session as OrmSession
 from fastapi.testclient import TestClient
 
 from app.database import SessionLocal
-from app.main import app
+from app.main import app, fastapi_app
 from app.models import CreditTransaction, SimulationRecord
+
+FRONTEND_ORIGIN = "https://ecopulse-frontend-p55z.onrender.com"
 
 
 def production_simulation_payload():
@@ -66,10 +68,55 @@ def test_health_and_forecast_api():
         dashboard = client.get("/api/v1/dashboard")
         assert dashboard.status_code == 200
         assert dashboard.json()["weather"]["source"] in {"open-meteo", "synthetic"}
-        with client.websocket_connect("/ws/grid-telemetry") as socket:
+        with client.websocket_connect(
+            "/ws/grid-telemetry", headers={"origin": FRONTEND_ORIGIN}
+        ) as socket:
             telemetry = socket.receive_json()
             assert telemetry["simulated"] is True
             assert telemetry["solar_generation_kw"] >= 0
+
+
+def test_cors_allows_frontend_get_and_preflight_and_rejects_other_origins():
+    with TestClient(app) as client:
+        response = client.get("/api/v1/config", headers={"Origin": FRONTEND_ORIGIN})
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == FRONTEND_ORIGIN
+
+        preflight = client.options(
+            "/api/v1/config",
+            headers={
+                "Origin": FRONTEND_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,authorization",
+            },
+        )
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == FRONTEND_ORIGIN
+        allowed_methods = preflight.headers["access-control-allow-methods"]
+        assert all(
+            method in allowed_methods
+            for method in ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+        )
+
+        disallowed = client.get(
+            "/api/v1/config", headers={"Origin": "https://untrusted.example"}
+        )
+        assert disallowed.status_code == 200
+        assert "access-control-allow-origin" not in disallowed.headers
+
+
+def test_cors_headers_are_added_to_unhandled_error_responses():
+    def raise_error():
+        raise RuntimeError("test error")
+
+    fastapi_app.add_api_route("/_test/cors-error", raise_error, methods=["GET"])
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(
+            "/_test/cors-error", headers={"Origin": FRONTEND_ORIGIN}
+        )
+
+    assert response.status_code == 500
+    assert response.headers["access-control-allow-origin"] == FRONTEND_ORIGIN
 
 
 def test_simulation_is_saved_and_creates_credit_ledger_entries():

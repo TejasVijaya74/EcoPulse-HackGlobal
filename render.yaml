@@ -14,7 +14,7 @@ services:
           name: ecopulse-db
           property: connectionString
       - key: CORS_ORIGINS
-        value: https://ecopulse-frontend.onrender.com
+        value: https://ecopulse-frontend-p55z.onrender.com
       - key: WEATHER_LATITUDE
         value: ""
       - key: WEATHER_LONGITUDE
@@ -30,9 +30,9 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://ecopulse-api.onrender.com/api/v1
+        value: https://ecopulse-api-5occ.onrender.com/api/v1
       - key: VITE_WS_URL
-        value: wss://ecopulse-api.onrender.com/ws/grid-telemetry
+        value: wss://ecopulse-api-5occ.onrender.com/ws/grid-telemetry
     routes:
       - type: rewrite
         source: /*
