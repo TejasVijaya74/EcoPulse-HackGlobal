@@ -1,11 +1,53 @@
 import os
 import uuid
+from datetime import datetime, timezone
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-from app.migrate import apply_migrations
+from app.database import Base
+from app.migrate import MIGRATION_FILE, apply_migrations
+
+
+def _postgres_connection(monkeypatch, column_info):
+    connection = Mock()
+    connection.dialect.name = "postgresql"
+    inspection_result = Mock()
+    inspection_result.one.return_value = column_info
+    connection.execute.side_effect = [Mock(), inspection_result]
+    monkeypatch.setattr(Base.metadata, "create_all", lambda bind: None)
+    return connection
+
+
+def test_postgresql_migration_sql_uses_no_percent_placeholders():
+    migration_sql = MIGRATION_FILE.read_text(encoding="utf-8")
+    assert "%" not in migration_sql
+    assert migration_sql.strip().splitlines() == [
+        "ALTER TABLE credit_transactions",
+        "ALTER COLUMN transaction_type TYPE VARCHAR(40);",
+    ]
+
+
+def test_postgresql_migration_fails_if_transaction_type_column_is_missing(monkeypatch):
+    connection = _postgres_connection(monkeypatch, ("public", "public", None, None))
+
+    with pytest.raises(RuntimeError, match="transaction_type.*was not found"):
+        apply_migrations(connection)
+
+    connection.exec_driver_sql.assert_not_called()
+
+
+def test_postgresql_migration_fails_if_table_resolves_outside_current_schema(monkeypatch):
+    connection = _postgres_connection(
+        monkeypatch, ("public", "another_schema", "character varying", 20)
+    )
+
+    with pytest.raises(RuntimeError, match="must be in the current schema"):
+        apply_migrations(connection)
+
+    connection.exec_driver_sql.assert_not_called()
 
 
 def test_sqlite_bootstrap_creates_40_character_transaction_type(tmp_path):
@@ -17,21 +59,24 @@ def test_sqlite_bootstrap_creates_40_character_transaction_type(tmp_path):
         column = next(
             column
             for column in connection.exec_driver_sql("PRAGMA table_info(credit_transactions)")
-            if column["name"] == "transaction_type"
+            if column._mapping["name"] == "transaction_type"
         )
         connection.execute(
             text(
                 "INSERT INTO credit_transactions "
-                "(household_id, energy_kwh, credits, transaction_type) "
-                "VALUES ('HH-001', 1.0, 10.0, :transaction_type)"
+                "(timestamp, household_id, energy_kwh, credits, transaction_type) "
+                "VALUES (:timestamp, 'HH-001', 1.0, 10.0, :transaction_type)"
             ),
-            {"transaction_type": "community_contribution"},
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "transaction_type": "community_contribution",
+            },
         )
         saved = connection.execute(
             text("SELECT transaction_type FROM credit_transactions")
         ).scalar_one()
 
-    assert column["type"].upper() == "VARCHAR(40)"
+    assert column._mapping["type"].upper() == "VARCHAR(40)"
     assert saved == "community_contribution"
     test_engine.dispose()
 

@@ -30,8 +30,39 @@ def apply_migrations(connection: Connection) -> None:
     Base.metadata.create_all(bind=connection)
 
     if dialect_name == "postgresql":
-        migration_sql = MIGRATION_FILE.read_text(encoding="utf-8")
-        connection.exec_driver_sql(migration_sql)
+        column_info = connection.execute(
+            text(
+                "SELECT current_schema(), table_schema, data_type, "
+                "character_maximum_length "
+                "FROM (SELECT to_regclass('credit_transactions') AS relation_oid) resolved "
+                "LEFT JOIN pg_class ON pg_class.oid = resolved.relation_oid "
+                "LEFT JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace "
+                "LEFT JOIN information_schema.columns "
+                "ON information_schema.columns.table_schema = pg_namespace.nspname "
+                "AND information_schema.columns.table_name = pg_class.relname "
+                "AND information_schema.columns.column_name = 'transaction_type'"
+            )
+        ).one()
+        current_schema, table_schema, data_type, existing_length = column_info
+        if table_schema is None:
+            raise RuntimeError("PostgreSQL table 'credit_transactions' was not found.")
+        if table_schema != current_schema:
+            raise RuntimeError(
+                "PostgreSQL table 'credit_transactions' must be in the current schema "
+                f"({current_schema!r}); it resolved to {table_schema!r}."
+            )
+        if data_type is None:
+            raise RuntimeError(
+                "PostgreSQL column 'credit_transactions.transaction_type' was not found."
+            )
+        if data_type == "character varying" and existing_length is not None and existing_length < 40:
+            migration_sql = MIGRATION_FILE.read_text(encoding="utf-8")
+            connection.exec_driver_sql(migration_sql)
+        elif data_type not in {"character varying", "text"}:
+            raise RuntimeError(
+                "PostgreSQL column 'credit_transactions.transaction_type' must be "
+                f"VARCHAR or TEXT, not {data_type!r}."
+            )
 
 
 def run_migrations(target_engine: Engine = engine) -> None:
