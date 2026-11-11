@@ -45,10 +45,6 @@ GRID_EMISSIONS_FACTOR_SOURCE = os.getenv(
 GRID_EMISSIONS_REPORTING_YEAR = os.getenv("GRID_EMISSIONS_REPORTING_YEAR", "2022-23").strip()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN", "").strip()
-_public_demo_mode = os.getenv("PUBLIC_DEMO_MODE", "false").strip().lower()
-if _public_demo_mode not in {"", "true", "false"}:
-    raise ValueError("PUBLIC_DEMO_MODE must be 'true' or 'false'.")
-PUBLIC_DEMO_MODE = _public_demo_mode == "true"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
 GROQ_API_BASE_URL = os.getenv(
     "GROQ_API_BASE_URL", "https://api.groq.com/openai/v1"

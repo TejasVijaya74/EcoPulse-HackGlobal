@@ -7,11 +7,8 @@ import {
   getConfig,
   getCredits,
   getDashboard,
-  getDemoConfig,
   getForecast,
-  getPublicDemoStatus,
   runSimulation,
-  runDemoSimulation,
   setApiAccessToken,
 } from "./services/api";
 
@@ -41,30 +38,15 @@ export default function App() {
   const [error, setError] = useState("");
   const [apiToken, setApiToken] = useState(getApiAccessToken);
   const [tokenDraft, setTokenDraft] = useState(getApiAccessToken);
-  const [publicDemoMode, setPublicDemoMode] = useState(null);
 
   const refresh = useCallback(async () => {
     try {
-      const { public_demo_mode: demoEnabled } = await getPublicDemoStatus();
-      setPublicDemoMode(demoEnabled);
-      const hasToken = Boolean(getApiAccessToken());
-      if (!demoEnabled && !hasToken) {
-        setDashboard(null);
-        setForecast(null);
-        setCredits(null);
-        setConfig(null);
-        setError("Set backend access to load protected preview data.");
-        return;
-      }
-
-      const [dashboardData, forecastData, configData] = await Promise.all([
-        getDashboard(),
-        getForecast(),
-        demoEnabled ? getDemoConfig() : getConfig(),
+      const [dashboardData, forecastData, creditsData, configData] = await Promise.all([
+        getDashboard(), getForecast(), getCredits(), getConfig(),
       ]);
       setDashboard(dashboardData);
       setForecast(forecastData);
-      setCredits(demoEnabled ? null : await getCredits());
+      setCredits(creditsData);
       setConfig(configData);
       setError("");
     } catch (requestError) {
@@ -80,29 +62,8 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  useEffect(() => {
-    if (page !== "credits") return undefined;
-    let active = true;
-    getCredits()
-      .then((data) => {
-        if (!active) return;
-        setCredits(data);
-        setError("");
-      })
-      .catch((requestError) => {
-        if (active) setError(errorMessage(requestError));
-      });
-    return () => {
-      active = false;
-    };
-  }, [apiToken, page]);
-
   const applyTelemetryFallback = useCallback((data) => setDashboard(data), []);
-  const { telemetry, connection } = useLiveTelemetry(
-    publicDemoMode,
-    apiToken,
-    applyTelemetryFallback,
-  );
+  const { telemetry, connection } = useLiveTelemetry(applyTelemetryFallback);
 
   const saveApiToken = (event) => {
     event.preventDefault();
@@ -110,27 +71,19 @@ export default function App() {
     setApiAccessToken(token);
     setApiToken(token);
     setTokenDraft(token);
-    refresh();
   };
 
   const clearApiToken = () => {
     setApiAccessToken("");
     setApiToken("");
     setTokenDraft("");
-    refresh();
-  };
-
-  const selectPage = (nextPage) => {
-    setPage(nextPage);
   };
 
   const handleSimulation = async (parameters) => {
     setRunning(true);
     setError("");
     try {
-      const result = publicDemoMode && !apiToken
-        ? await runDemoSimulation(parameters)
-        : await runSimulation(parameters);
+      const result = await runSimulation(parameters);
       setSimulation(result);
       setDashboard((current) => ({
         ...current,
@@ -144,10 +97,10 @@ export default function App() {
         optimization_comparison: result.optimization_comparison,
         carbon_impact: result.carbon_impact,
       }));
-      const forecastData = await getForecast();
-      setForecast(forecastData);
-      if (result.persisted === false) setCredits(null);
-      else setCredits(await getCredits());
+      await Promise.all([
+        getCredits().then(setCredits),
+        getForecast().then(setForecast),
+      ]);
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -157,10 +110,10 @@ export default function App() {
 
   const titles = Object.fromEntries(navigation.map(([key, title]) => [key, title]));
   const content = {
-    overview: <Overview dashboard={dashboard} credits={credits} telemetry={telemetry} publicDemoMode={publicDemoMode} />,
+    overview: <Overview dashboard={dashboard} credits={credits} telemetry={telemetry} />,
     forecast: <Forecast forecast={forecast} />,
     twin: <DigitalTwin telemetry={telemetry} dashboard={dashboard} />,
-    simulation: <Simulation config={config} result={simulation} running={running} onRun={handleSimulation} publicDemoMode={publicDemoMode} />,
+    simulation: <Simulation config={config} result={simulation} running={running} onRun={handleSimulation} />,
     credits: <Credits credits={credits} loading={loading} error={error} />,
   }[page];
 
@@ -174,7 +127,7 @@ export default function App() {
         <div className="nav-label">WORKSPACE</div>
         <nav>
           {navigation.map(([key, label, Icon]) => (
-            <button key={key} className={`nav-item ${page === key ? "selected" : ""}`} onClick={() => selectPage(key)}>
+            <button key={key} className={`nav-item ${page === key ? "selected" : ""}`} onClick={() => setPage(key)}>
               <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
             </button>
           ))}
@@ -189,7 +142,7 @@ export default function App() {
           <div className="mobile-brand"><BatteryCharging size={19} /> EcoPulse</div>
           <div className="breadcrumb">EcoPulse <span>/</span> {titles[page]}</div>
           <div className="topbar-actions">
-            {(publicDemoMode === false || page === "credits") && <details className="api-access">
+            <details className="api-access">
               <summary>{apiToken ? "Access set" : "Set access"}</summary>
               <form onSubmit={saveApiToken}>
                 <label htmlFor="api-access-token">Backend bearer token</label>
@@ -204,10 +157,10 @@ export default function App() {
                   <button className="button primary" type="submit" disabled={!tokenDraft.trim()}>Use token</button>
                   {apiToken && <button className="button secondary" type="button" onClick={clearApiToken}>Clear</button>}
                 </div>
-                <small>Held in page memory only; cleared when this page is reloaded.</small>
+                <small>Kept in this tab only; protected requests verify it with the backend.</small>
               </form>
-            </details>}
-            <div className={`api-state ${error ? "error" : ""}`}><span /> {error ? "Connection issue" : loading ? "Connecting" : publicDemoMode ? "Public demo" : apiToken ? "API connected" : "Access required"}</div>
+            </details>
+            <div className={`api-state ${error ? "error" : ""}`}><span /> {error ? "Connection issue" : loading ? "Connecting" : "API connected"}</div>
           </div>
         </header>
         <div className="main-content">

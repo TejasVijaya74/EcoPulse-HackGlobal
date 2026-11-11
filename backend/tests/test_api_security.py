@@ -11,7 +11,6 @@ from app.api import routes
 from app.api.routes import router
 from app.config import DEFAULT_CONFIG
 from app.database import Base, get_db
-from app.middleware import RequestSizeLimitMiddleware
 from app.rate_limits import _client_bucket, _consume_window, ensure_rate_limit_storage
 from app.services.weatherapi import WeatherTimeout
 from app import security
@@ -44,7 +43,6 @@ def isolated_client(tmp_path):
 
     test_app = FastAPI()
     test_app.include_router(router)
-    test_app.add_middleware(RequestSizeLimitMiddleware)
     test_app.state.test_engine = engine
     test_app.dependency_overrides[get_db] = override_get_db
     with TestClient(test_app) as client:
@@ -58,247 +56,14 @@ def configured_api_token(monkeypatch):
     return TEST_TOKEN
 
 
-def test_health_and_configuration_read_require_auth(
-    isolated_client, configured_api_token
-):
-    denied_health = isolated_client.get("/api/v1/health")
-    health = isolated_client.get(
-        "/api/v1/health",
-        headers={"Authorization": f"Bearer {configured_api_token}"},
-    )
-    denied = isolated_client.get("/api/v1/config")
-    config = isolated_client.get(
-        "/api/v1/config",
-        headers={"Authorization": f"Bearer {configured_api_token}"},
-    )
+def test_read_only_health_and_config_remain_public(isolated_client):
+    health = isolated_client.get("/api/v1/health")
+    config = isolated_client.get("/api/v1/config")
 
-    assert denied_health.status_code == 401
     assert health.status_code == 200
     assert health.json()["database"] == "connected"
-    assert denied.status_code == 401
     assert config.status_code == 200
     assert config.json()["households"] == 60
-
-
-def test_public_demo_exposes_only_safe_preview_data_and_stateless_simulation(
-    isolated_client, monkeypatch
-):
-    monkeypatch.setattr(security, "PUBLIC_DEMO_MODE", True)
-    monkeypatch.setattr(
-        routes,
-        "get_hourly_weather",
-        lambda *_args: {
-            "source": "synthetic",
-            "label": "Synthetic weather",
-            "fallback_reason": None,
-            "attribution_url": "https://open-meteo.com/",
-        },
-    )
-    monkeypatch.setattr(
-        routes,
-        "forecast",
-        lambda hours, *_args: {"forecast": [{"hour": index} for index in range(hours)]},
-    )
-    monkeypatch.setattr(
-        routes,
-        "calculate_simulation",
-        lambda *_args: {"scenario_label": "Normal Conditions", "series": [], "metrics": {}},
-    )
-    with isolated_client.app.state.test_engine.connect() as connection:
-        simulations_before = connection.exec_driver_sql(
-            "SELECT COUNT(*) FROM simulations"
-        ).scalar_one()
-        credits_before = connection.exec_driver_sql(
-            "SELECT COUNT(*) FROM credit_transactions"
-        ).scalar_one()
-
-    status = isolated_client.get("/api/v1/demo/status")
-    config = isolated_client.get("/api/v1/demo/config")
-    dashboard = isolated_client.get("/api/v1/dashboard")
-    forecast = isolated_client.get("/api/v1/forecast")
-    simulation = isolated_client.post(
-        "/api/v1/demo/simulate",
-        json={"scenario": "normal", "duration_hours": 24, "households": 2},
-    )
-
-    assert status.status_code == 200
-    assert status.json() == {"public_demo_mode": True}
-    assert status.headers["cache-control"] == "no-store"
-    assert config.status_code == 200
-    assert set(config.json()) == {
-        "households",
-        "solar_capacity_kw",
-        "storage_capacity_kwh",
-        "initial_storage_percent",
-        "grid_import_limit_kw",
-        "grid_export_limit_kw",
-        "cloud_cover",
-        "temperature_c",
-        "demand_multiplier",
-        "grid_available",
-        "random_seed",
-    }
-    assert dashboard.status_code == 200
-    assert forecast.status_code == 200
-    assert simulation.status_code == 200
-    assert simulation.json()["persisted"] is False
-    assert simulation.json()["simulated"] is True
-    with isolated_client.app.state.test_engine.connect() as connection:
-        assert connection.exec_driver_sql(
-            "SELECT COUNT(*) FROM simulations"
-        ).scalar_one() == simulations_before
-        assert connection.exec_driver_sql(
-            "SELECT COUNT(*) FROM credit_transactions"
-        ).scalar_one() == credits_before
-    assert "API_ACCESS_TOKEN" not in config.text
-    assert "DATABASE_URL" not in config.text
-
-
-def test_public_provider_endpoints_and_advisor_fail_safely_without_nested_research(
-    isolated_client, monkeypatch
-):
-    monkeypatch.setattr(security, "PUBLIC_DEMO_MODE", True)
-    monkeypatch.setattr(routes, "GROQ_API_KEY", "test-only-groq-key")
-    monkeypatch.setattr(
-        routes,
-        "get_weatherapi_forecast",
-        lambda *_args, **_kwargs: {"source": "WeatherAPI.com", "current": {}},
-    )
-    monkeypatch.setattr(routes, "build_weather_insights", lambda *_args: {"available": True})
-    research_calls = []
-
-    def unexpected_research(topic):
-        research_calls.append(topic)
-        return {"available": True, "topic": topic}
-
-    monkeypatch.setattr(routes, "search_research", unexpected_research)
-    monkeypatch.setattr(
-        routes,
-        "get_weatherapi_forecast",
-        lambda *_args, **_kwargs: {"source": "WeatherAPI.com", "current": {}},
-    )
-
-    async def advisor_answer(_question, context):
-        return "Safe demo answer."
-
-    monkeypatch.setattr(routes, "ask_energy_advisor", advisor_answer)
-    weather = isolated_client.get("/api/v1/intelligence/overview?location=New%20Delhi")
-    research = isolated_client.get("/api/v1/intelligence/research?topic=solar")
-    answer = isolated_client.post(
-        "/api/v1/advisor",
-        json={"question": "Explain simulated grid imports", "research_topic": "solar"},
-    )
-
-    assert weather.status_code == 200
-    assert research.status_code == 200
-    assert answer.status_code == 200
-    assert answer.json()["answer"] == "Safe demo answer."
-    assert research_calls == ["solar"]
-
-    def missing_weather(*_args, **_kwargs):
-        from app.services.weatherapi import WeatherNotConfigured
-
-        raise WeatherNotConfigured("WeatherAPI is not configured.")
-
-    def missing_research(_topic):
-        from app.services.research import ResearchNotConfigured
-
-        raise ResearchNotConfigured("Energy research is not configured.")
-
-    monkeypatch.setattr(routes, "get_weatherapi_forecast", missing_weather)
-    monkeypatch.setattr(routes, "search_research", missing_research)
-    unavailable_weather = isolated_client.get("/api/v1/intelligence/overview")
-    unavailable_research = isolated_client.get(
-        "/api/v1/intelligence/research?topic=solar"
-    )
-
-    assert unavailable_weather.status_code == 503
-    assert unavailable_weather.json()["detail"] == "WeatherAPI is not configured."
-    assert unavailable_research.status_code == 503
-    assert unavailable_research.json()["detail"] == "Energy research is not configured."
-
-
-def test_public_mode_keeps_private_and_mutating_routes_protected(
-    isolated_client, monkeypatch
-):
-    monkeypatch.setattr(security, "PUBLIC_DEMO_MODE", True)
-    protected_reads = (
-        "/api/v1/health",
-        "/api/v1/config",
-        "/api/v1/credits",
-        "/api/v1/simulation/history",
-        "/api/v1/simulation/1",
-        "/api/v1/intelligence/weather/current",
-    )
-    for path in protected_reads:
-        assert isolated_client.get(path).status_code == 401
-
-    assert isolated_client.post("/api/v1/config", json=valid_config()).status_code == 401
-    assert isolated_client.post(
-        "/api/v1/simulate",
-        json={"scenario": "normal", "duration_hours": 24},
-    ).status_code == 401
-    assert isolated_client.post("/api/v1/model/train").status_code == 401
-
-
-def test_public_input_validation_and_request_size_limit(isolated_client, monkeypatch):
-    monkeypatch.setattr(security, "PUBLIC_DEMO_MODE", True)
-    invalid_requests = (
-        isolated_client.get("/api/v1/forecast?hours=49"),
-        isolated_client.get("/api/v1/intelligence/research?topic=unsupported"),
-        isolated_client.get("/api/v1/intelligence/overview?location=Delhi%2Fprivate"),
-        isolated_client.post(
-            "/api/v1/demo/simulate",
-            json={"scenario": "normal", "duration_hours": 49},
-        ),
-        isolated_client.post(
-            "/api/v1/demo/simulate",
-            json={"scenario": "normal", "households": 251},
-        ),
-        isolated_client.post("/api/v1/advisor", json={"question": "   "}),
-    )
-    assert all(response.status_code == 422 for response in invalid_requests)
-
-    too_large = isolated_client.post(
-        "/api/v1/advisor",
-        content=b'{"question":"' + b"x" * 16_384 + b'"}',
-        headers={"Content-Type": "application/json"},
-    )
-    assert too_large.status_code == 413
-    assert too_large.json()["detail"] == "Request body is too large."
-
-
-def test_public_rate_limit_returns_retry_after(isolated_client, monkeypatch):
-    monkeypatch.setattr(security, "PUBLIC_DEMO_MODE", True)
-    monkeypatch.setattr("app.rate_limits.time.time", lambda: 1_800_000_000)
-
-    responses = [isolated_client.get("/api/v1/demo/status") for _ in range(61)]
-
-    assert all(response.status_code == 200 for response in responses[:60])
-    assert responses[60].status_code == 429
-    assert int(responses[60].headers["retry-after"]) > 0
-
-
-def test_public_routes_require_auth_when_demo_mode_is_disabled(
-    isolated_client, configured_api_token, monkeypatch
-):
-    monkeypatch.setattr(security, "PUBLIC_DEMO_MODE", False)
-
-    for path in (
-        "/api/v1/dashboard",
-        "/api/v1/forecast",
-        "/api/v1/demo/config",
-        "/api/v1/intelligence/overview",
-        "/api/v1/intelligence/research",
-    ):
-        assert isolated_client.get(path).status_code == 401
-    assert isolated_client.post(
-        "/api/v1/demo/simulate",
-        json={"scenario": "normal", "duration_hours": 24},
-    ).status_code == 401
-    assert isolated_client.get("/api/v1/demo/status").json() == {
-        "public_demo_mode": False
-    }
 
 
 def test_protected_operation_fails_closed_when_token_is_not_configured(
@@ -342,8 +107,7 @@ def test_missing_or_invalid_bearer_token_is_rejected(
 def test_config_update_requires_and_accepts_bearer_token(
     isolated_client, configured_api_token
 ):
-    headers = {"Authorization": f"Bearer {configured_api_token}"}
-    updated = isolated_client.get("/api/v1/config", headers=headers).json()
+    updated = isolated_client.get("/api/v1/config").json()
     updated["households"] = 12
 
     denied = isolated_client.post("/api/v1/config", json=updated)
@@ -356,7 +120,7 @@ def test_config_update_requires_and_accepts_bearer_token(
     assert denied.status_code == 401
     assert allowed.status_code == 200
     assert allowed.json()["households"] == 12
-    assert isolated_client.get("/api/v1/config", headers=headers).json()["households"] == 12
+    assert isolated_client.get("/api/v1/config").json()["households"] == 12
 
 
 def test_provider_endpoint_requires_auth_and_preserves_response_shape(

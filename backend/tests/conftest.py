@@ -12,7 +12,6 @@ TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="ecopulse-backend-tests-"))
 TEST_MODEL_DIR = TEST_DATA_DIR / "models"
 
 os.environ["API_ACCESS_TOKEN"] = TEST_API_ACCESS_TOKEN
-os.environ["PUBLIC_DEMO_MODE"] = "false"
 os.environ["DATABASE_URL"] = f"sqlite:///{(TEST_DATA_DIR / 'tests.sqlite3').as_posix()}"
 os.environ["CORS_ORIGINS"] = TEST_FRONTEND_ORIGIN
 

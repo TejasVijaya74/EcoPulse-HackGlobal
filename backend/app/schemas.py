@@ -43,15 +43,6 @@ class SimulationParameters(BaseModel):
     random_seed: int = Field(default=42, ge=0, le=2_147_483_647)
 
 
-class DemoSimulationParameters(SimulationParameters):
-    households: int = Field(default=60, ge=1, le=250)
-    solar_capacity_kw: float = Field(default=180, ge=0, le=500)
-    storage_capacity_kwh: float = Field(default=320, ge=0, le=1000)
-    grid_import_limit_kw: float = Field(default=250, ge=0, le=500)
-    grid_export_limit_kw: float = Field(default=120, ge=0, le=500)
-    duration_hours: int = Field(default=48, ge=24, le=48)
-
-
 class ConfigurationUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

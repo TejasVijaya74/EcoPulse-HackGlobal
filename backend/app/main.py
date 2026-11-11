@@ -11,7 +11,6 @@ from app.config import CORS_ORIGINS, DEFAULT_CONFIG, MODEL_DIR
 from app.database import Base, SessionLocal, engine
 from app.ml.train import TRAINING_DATA_VERSION, train_models
 from app.models import ConfigurationRecord, ModelTrainingRecord
-from app.middleware import RequestSizeLimitMiddleware
 from app.rate_limits import ensure_rate_limit_storage
 
 
@@ -65,7 +64,7 @@ fastapi_app.include_router(websocket_router)
 
 # Wrap the complete FastAPI app so CORS headers are added to unhandled error responses too.
 app = CORSMiddleware(
-    app=RequestSizeLimitMiddleware(fastapi_app),
+    app=fastapi_app,
     allow_origins=list(CORS_ORIGINS),
     allow_credentials=False,
     allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

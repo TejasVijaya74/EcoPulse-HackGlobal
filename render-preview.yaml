@@ -22,8 +22,6 @@
         value: UTC
       - key: API_ACCESS_TOKEN
         sync: false
-      - key: PUBLIC_DEMO_MODE
-        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: TAVILY_API_KEY

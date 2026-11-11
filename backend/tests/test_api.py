@@ -49,12 +49,12 @@ def grid_outage_payload():
     }
 
 
-def test_health_and_forecast_api(auth_headers):
+def test_health_and_forecast_api():
     with TestClient(app) as client:
-        health = client.get("/api/v1/health", headers=auth_headers)
+        health = client.get("/api/v1/health")
         assert health.status_code == 200
         assert health.json()["database"] == "connected"
-        response = client.get("/api/v1/forecast", headers=auth_headers)
+        response = client.get("/api/v1/forecast")
         assert response.status_code == 200
         body = response.json()
         assert len(body["forecast"]) == 24
@@ -66,7 +66,7 @@ def test_health_and_forecast_api(auth_headers):
         assert all(point["household_demand_kw"] >= 0 for point in body["forecast"])
         assert "solar_lower_kw" in body["forecast"][0]
         assert body["weather_source"] in {"open-meteo", "synthetic"}
-        dashboard = client.get("/api/v1/dashboard", headers=auth_headers)
+        dashboard = client.get("/api/v1/dashboard")
         assert dashboard.status_code == 200
         assert dashboard.json()["weather"]["source"] in {"open-meteo", "synthetic"}
         carbon = dashboard.json()["carbon_impact"]
@@ -77,15 +77,12 @@ def test_health_and_forecast_api(auth_headers):
         with client.websocket_connect(
             "/ws/grid-telemetry", headers={"origin": FRONTEND_ORIGIN}
         ) as socket:
-            socket.send_json({"type": "auth", "token": auth_headers["Authorization"].split(" ", 1)[1]})
             telemetry = socket.receive_json()
             assert telemetry["simulated"] is True
             assert telemetry["solar_generation_kw"] >= 0
 
 
-def test_health_database_failure_does_not_expose_database_details(
-    monkeypatch, caplog, auth_headers
-):
+def test_health_database_failure_does_not_expose_database_details(monkeypatch, caplog):
     class BrokenDatabase:
         def execute(self, _statement):
             raise RuntimeError("postgresql://test-user:test-password@db.example/test")
@@ -95,7 +92,7 @@ def test_health_database_failure_does_not_expose_database_details(
 
     monkeypatch.setitem(fastapi_app.dependency_overrides, get_db, broken_database)
     with TestClient(app) as client:
-        response = client.get("/api/v1/health", headers=auth_headers)
+        response = client.get("/api/v1/health")
 
     assert response.status_code == 503
     assert response.json()["detail"] == "Database unavailable."
@@ -103,7 +100,7 @@ def test_health_database_failure_does_not_expose_database_details(
     assert "test-password" not in caplog.text
 
 
-def test_forecast_failure_returns_safe_error(monkeypatch, caplog, auth_headers):
+def test_forecast_failure_returns_safe_error(monkeypatch, caplog):
     from app.api import routes
 
     def fail_forecast(*_args):
@@ -112,7 +109,7 @@ def test_forecast_failure_returns_safe_error(monkeypatch, caplog, auth_headers):
     monkeypatch.setattr(routes, "forecast", fail_forecast)
     with TestClient(app) as client:
         with caplog.at_level(logging.ERROR, logger="app.api.routes"):
-            response = client.get("/api/v1/forecast", headers=auth_headers)
+            response = client.get("/api/v1/forecast")
 
     assert response.status_code == 500
     assert response.json()["detail"] == "Forecast could not be generated."
@@ -152,7 +149,7 @@ def test_advisor_endpoint_returns_only_advisor_errors_without_breaking_dashboard
             json={"question": "Explain storage"},
             headers=auth_headers,
         )
-        dashboard_response = client.get("/api/v1/dashboard", headers=auth_headers)
+        dashboard_response = client.get("/api/v1/dashboard")
 
     assert advisor_response.status_code == 504
     assert dashboard_response.status_code == 200
@@ -228,7 +225,7 @@ def test_optional_intelligence_provider_failures_do_not_block_simulation(
         )
         result = simulation.json()
         detail = (
-            client.get(f"/api/v1/simulation/{result['id']}", headers=auth_headers).json()
+            client.get(f"/api/v1/simulation/{result['id']}").json()
             if simulation.status_code == 200
             else {}
         )
@@ -244,15 +241,10 @@ def test_optional_intelligence_provider_failures_do_not_block_simulation(
     assert "energy_research" not in detail
 
 
-def test_cors_allows_frontend_get_and_preflight_and_rejects_other_origins(
-    monkeypatch, auth_headers
-):
+def test_cors_allows_frontend_get_and_preflight_and_rejects_other_origins(monkeypatch):
     monkeypatch.setattr(app, "allow_origins", [FRONTEND_ORIGIN])
     with TestClient(app) as client:
-        response = client.get(
-            "/api/v1/config",
-            headers={"Origin": FRONTEND_ORIGIN, **auth_headers},
-        )
+        response = client.get("/api/v1/config", headers={"Origin": FRONTEND_ORIGIN})
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == FRONTEND_ORIGIN
 
@@ -273,8 +265,7 @@ def test_cors_allows_frontend_get_and_preflight_and_rejects_other_origins(
         )
 
         disallowed = client.get(
-            "/api/v1/config",
-            headers={"Origin": "https://untrusted.example", **auth_headers},
+            "/api/v1/config", headers={"Origin": "https://untrusted.example"}
         )
         assert disallowed.status_code == 200
         assert "access-control-allow-origin" not in disallowed.headers
@@ -307,13 +298,11 @@ def test_simulation_is_saved_and_creates_credit_ledger_entries(auth_headers):
         result = response.json()
         assert result["id"]
         assert result["metrics"]["grid_imports_kwh"] == 0
-        detail = client.get(
-            f"/api/v1/simulation/{result['id']}", headers=auth_headers
-        )
+        detail = client.get(f"/api/v1/simulation/{result['id']}")
         assert detail.status_code == 200
-        history = client.get("/api/v1/simulation/history", headers=auth_headers)
+        history = client.get("/api/v1/simulation/history")
         assert any(item["id"] == result["id"] for item in history.json()["items"])
-        ledger = client.get("/api/v1/credits", headers=auth_headers).json()
+        ledger = client.get("/api/v1/credits").json()
         assert ledger["total_credits"] >= result["metrics"]["community_credits"]
         simulation_transactions = [
             item for item in ledger["transactions"] if item["simulation_id"] == result["id"]
@@ -404,9 +393,7 @@ def test_duplicate_household_transaction_invalidates_simulation_contribution_in_
     auth_headers,
 ):
     with TestClient(app) as client:
-        credits_before = client.get(
-            "/api/v1/credits", headers=auth_headers
-        ).json()["total_credits"]
+        credits_before = client.get("/api/v1/credits").json()["total_credits"]
         response = client.post(
             "/api/v1/simulate",
             json=production_simulation_payload(),
@@ -435,7 +422,7 @@ def test_duplicate_household_transaction_invalidates_simulation_contribution_in_
             duplicate_id = duplicate.id
 
         try:
-            ledger = client.get("/api/v1/credits", headers=auth_headers).json()
+            ledger = client.get("/api/v1/credits").json()
             assert ledger["total_credits"] == credits_before
             assert ledger["excluded_transactions"] >= 2
             assert all(item["simulation_id"] != result["id"] for item in ledger["transactions"])
@@ -527,7 +514,7 @@ def test_simulation_persistence_failure_rolls_back_and_logs_context(caplog, auth
 
 def test_simulation_uses_saved_config_and_explicit_parameters_override_it(auth_headers):
     with TestClient(app) as client:
-        original = client.get("/api/v1/config", headers=auth_headers).json()
+        original = client.get("/api/v1/config").json()
         changed = {**original, "households": 4, "solar_capacity_kw": 0}
         try:
             response = client.post(

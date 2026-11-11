@@ -19,7 +19,7 @@ import { askEnergyAdvisor, errorMessage } from "../services/api";
 
 const shortTime = (value) => new Date(value).toLocaleTimeString([], { hour: "numeric" });
 
-export default function Overview({ dashboard, credits, telemetry, publicDemoMode }) {
+export default function Overview({ dashboard, credits, telemetry }) {
   const series = useMemo(() => dashboard?.series?.slice(0, 24) || [], [dashboard]);
   const metrics = dashboard?.metrics || {};
   const current = telemetry || dashboard?.current || {};
@@ -65,7 +65,7 @@ export default function Overview({ dashboard, credits, telemetry, publicDemoMode
         </p>
       </ChartCard>
 
-      <AdvisorPanel dashboard={dashboard} publicDemoMode={publicDemoMode} />
+      <AdvisorPanel dashboard={dashboard} />
       <EnergyIntelligenceCenter />
 
       <div className="metric-grid">
@@ -141,7 +141,7 @@ function Result({ label, value, unit }) {
   );
 }
 
-function AdvisorPanel({ dashboard, publicDemoMode }) {
+function AdvisorPanel({ dashboard }) {
   const [question, setQuestion] = useState("");
   const [researchTopic, setResearchTopic] = useState("");
   const [answer, setAnswer] = useState("");
@@ -154,10 +154,7 @@ function AdvisorPanel({ dashboard, publicDemoMode }) {
     setError("");
     setAnswer("");
     try {
-      const response = await askEnergyAdvisor(
-        question.trim(),
-        publicDemoMode ? "" : researchTopic,
-      );
+      const response = await askEnergyAdvisor(question.trim(), researchTopic);
       setAnswer(response.answer);
     } catch (requestError) {
       setError(`${errorMessage(requestError)} Energy monitoring remains available.`);
@@ -182,23 +179,17 @@ function AdvisorPanel({ dashboard, publicDemoMode }) {
           placeholder="For example: What is driving grid imports in this simulation?"
           required
         />
-        {publicDemoMode ? (
-          <p className="body-copy">Public demo answers do not trigger extra research requests. Explore the separate Energy Research panel.</p>
-        ) : (
-          <>
-            <label htmlFor="advisor-research-topic">Optional research context</label>
-            <select id="advisor-research-topic" value={researchTopic} onChange={(event) => setResearchTopic(event.target.value)}>
-              <option value="">No external research</option>
-              <option value="solar">Solar developments</option>
-              <option value="storage">Storage innovation</option>
-              <option value="grid">Grid advisories</option>
-              <option value="india_policy">India energy policy</option>
-              <option value="community_energy">Community energy</option>
-              <option value="climate_risks">Climate energy risks</option>
-              <option value="renewables">Renewables</option>
-            </select>
-          </>
-        )}
+        <label htmlFor="advisor-research-topic">Optional research context</label>
+        <select id="advisor-research-topic" value={researchTopic} onChange={(event) => setResearchTopic(event.target.value)}>
+          <option value="">No external research</option>
+          <option value="solar">Solar developments</option>
+          <option value="storage">Storage innovation</option>
+          <option value="grid">Grid advisories</option>
+          <option value="india_policy">India energy policy</option>
+          <option value="community_energy">Community energy</option>
+          <option value="climate_risks">Climate energy risks</option>
+          <option value="renewables">Renewables</option>
+        </select>
         <div className="advisor-actions">
           <span>Answers use available simulation figures only. Missing values should be identified.</span>
           <button className="button primary" type="submit" disabled={asking || !dashboard?.metrics}>

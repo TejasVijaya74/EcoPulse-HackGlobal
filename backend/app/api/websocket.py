@@ -4,12 +4,11 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import desc
 
-from app.config import CORS_ORIGINS, DEFAULT_CONFIG
+from app.config import CORS_ORIGINS
 from app.database import SessionLocal
 from app.models import SimulationRecord
 from app.services.analytics import create_dashboard_preview
 from app.api.routes import current_config
-from app.security import is_valid_api_token, public_demo_mode_enabled
 
 router = APIRouter()
 MAX_TELEMETRY_CONNECTIONS = 100
@@ -41,40 +40,16 @@ async def grid_telemetry(websocket: WebSocket) -> None:
     sample_index = 0
     try:
         await websocket.accept()
-        if not public_demo_mode_enabled():
-            try:
-                auth_message = await asyncio.wait_for(websocket.receive_text(), timeout=5)
-                if len(auth_message.encode("utf-8")) > 1024:
-                    await websocket.close(code=1008)
-                    return
-                credentials = json.loads(auth_message)
-            except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
-                await websocket.close(code=1008)
-                return
-            if (
-                not isinstance(credentials, dict)
-                or credentials.get("type") != "auth"
-                or not is_valid_api_token(credentials.get("token"))
-            ):
-                await websocket.close(code=1008)
-                return
-
         while True:
             with SessionLocal() as db:
-                public_preview = public_demo_mode_enabled()
-                latest = (
-                    None
-                    if public_preview
-                    else db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
-                )
+                latest = db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
                 if latest:
                     series = json.loads(latest.result_json)["series"]
                     if latest.id != simulation_id:
                         simulation_id = latest.id
                         sample_index = 0
                 else:
-                    config = DEFAULT_CONFIG if public_preview else current_config(db)
-                    series = create_dashboard_preview(config)["series"]
+                    series = create_dashboard_preview(current_config(db))["series"]
             if not series:
                 await websocket.send_json({"type": "error", "message": "No telemetry samples available."})
                 await asyncio.sleep(2)
