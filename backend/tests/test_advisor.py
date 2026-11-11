@@ -6,6 +6,66 @@ import pytest
 from app.services import advisor
 
 
+def test_advisor_context_and_instructions_explain_simulation_energy_accounting():
+    context = advisor.build_advisor_context(
+        {
+            "simulated": True,
+            "scenario_label": "Normal Conditions",
+            "parameters": {
+                "duration_hours": 48,
+                "households": 60,
+                "storage_capacity_kwh": 320.0,
+                "initial_storage_percent": 55.0,
+                "charging_efficiency": 0.92,
+                "discharging_efficiency": 0.9,
+                "self_discharge_per_hour": 0.001,
+            },
+            "assumptions": {
+                "model": "Abstract flywheel-based storage; simulated values only.",
+                "interval_hours": 1,
+            },
+            "metrics": {
+                "renewable_generated_kwh": 1277.16,
+                "household_consumption_kwh": 1715.48,
+                "grid_imports_kwh": 396.68,
+                "grid_exports_kwh": 0.0,
+                "initial_storage_kwh": 176.0,
+                "energy_stored_kwh": 600.5,
+                "energy_discharged_kwh": 694.35,
+                "storage_losses_kwh": 134.36,
+                "ending_storage_kwh": 0.0,
+                "curtailed_energy_kwh": 0.0,
+                "unserved_energy_kwh": 0.0,
+                "storage_utilization_percent": 4.52,
+                "energy_balance_error_kwh": 0.0,
+            },
+        }
+    )
+
+    assert context["simulated"] is True
+    assert context["energy_balance"]["renewable_generated_kwh"] == 1277.16
+    assert context["energy_balance"]["initial_storage_kwh"] == 176.0
+    assert context["storage_accounting"]["energy_discharged_kwh"] == 694.35
+    assert context["storage_accounting"]["capacity_kwh"] == 320.0
+    assert context["storage_accounting"]["storage_utilization_percent"] == 4.52
+    assert context["duration_hours"] == 48
+    assert context["assumptions"]["interval_hours"] == 1
+    assert context["simulation_parameters"]["duration_hours"] == 48
+    instructions = advisor.SYSTEM_INSTRUCTIONS.lower()
+    assert (
+        "renewable generation + grid imports + initial storage = household consumption - "
+        "unserved energy + grid exports + curtailment + storage losses + ending storage"
+    ) in instructions
+    assert "derived metrics" in instructions
+    assert "planning inputs" in instructions
+    assert "storage discharge is an internal transfer" in instructions
+    assert "never add discharged energy to solar generation" in instructions
+    assert "discharged energy came from initial storage" in instructions
+    assert "not state of charge" in instructions
+    assert "do not invent missing values" in instructions
+    assert "causal claims not established" in instructions
+
+
 class MockResponse:
     def __init__(self, status_code=200, body=None):
         self.status_code = status_code
@@ -65,7 +125,7 @@ def test_advisor_uses_backend_key_and_only_supplied_simulation_context(monkeypat
     assert client.request["json"]["model"] == "test-model"
     assert client.request["json"]["max_completion_tokens"] == 500
     messages = client.request["json"]["messages"]
-    assert "Use only the supplied context" in messages[0]["content"]
+    assert "Use supplied values for numerical claims" in messages[0]["content"]
     assert '"grid_dependency_percent": 42.5' in messages[1]["content"]
     assert "server-only-test-key" not in messages[1]["content"]
 

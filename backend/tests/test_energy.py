@@ -1,5 +1,7 @@
 import numpy as np
+import pytest
 
+from app.config import DEFAULT_CONFIG
 from app.data.synthetic_data import generate_synthetic_data
 from app.energy.optimizer import dispatch_interval
 from app.energy.physics import FlywheelStorage, flywheel_energy_kwh
@@ -130,6 +132,42 @@ def test_baseline_and_optimized_comparison_uses_identical_inputs_and_conserves_e
     assert comparison["changes"]["unserved_energy_reduction_kwh"] == round(
         baseline["metrics"]["unserved_energy_kwh"] - optimized["metrics"]["unserved_energy_kwh"], 2
     )
+
+
+def test_default_48_hour_simulation_energy_balance_regression():
+    result = simulate(
+        SimulationParameters(scenario="normal", duration_hours=48),
+        DEFAULT_CONFIG,
+    )
+    metrics = result["metrics"]
+
+    assert metrics["renewable_generated_kwh"] == pytest.approx(1277.16, abs=0.01)
+    assert metrics["household_consumption_kwh"] == pytest.approx(1715.48, abs=0.01)
+    assert metrics["grid_imports_kwh"] == pytest.approx(396.68, abs=0.01)
+    assert metrics["grid_exports_kwh"] == pytest.approx(0.0, abs=0.01)
+    assert metrics["initial_storage_kwh"] == pytest.approx(176.0, abs=0.01)
+    assert metrics["energy_stored_kwh"] == pytest.approx(600.5, abs=0.01)
+    assert metrics["energy_discharged_kwh"] == pytest.approx(694.35, abs=0.01)
+    assert metrics["ending_storage_kwh"] == pytest.approx(0.0, abs=0.01)
+    assert metrics["storage_utilization_percent"] == pytest.approx(4.52, abs=0.01)
+
+    source_energy = (
+        metrics["renewable_generated_kwh"]
+        + metrics["grid_imports_kwh"]
+        + metrics["initial_storage_kwh"]
+    )
+    accounted_energy = (
+        metrics["household_consumption_kwh"]
+        - metrics["unserved_energy_kwh"]
+        + metrics["grid_exports_kwh"]
+        + metrics["curtailed_energy_kwh"]
+        + metrics["storage_losses_kwh"]
+        + metrics["ending_storage_kwh"]
+    )
+    assert abs(source_energy - 1849.84) < 0.01
+    assert abs(accounted_energy - 1849.84) < 0.01
+    assert metrics["storage_losses_kwh"] == pytest.approx(134.36, abs=0.01)
+    assert metrics["energy_balance_error_kwh"] == pytest.approx(0.0, abs=0.01)
 
 
 def test_comparison_rejects_runs_with_different_parameters():
