@@ -142,7 +142,8 @@ Invoke-RestMethod -Method Post http://localhost:8000/api/v1/model/train
 | `POST /api/v1/advisor` | Ask the optional backend-only Groq energy advisor (optional `research_topic`) |
 | `GET /api/v1/simulation/history` | Recent simulation summaries |
 | `GET /api/v1/simulation/{simulation_id}` | Detailed stored simulation |
-| `GET /api/v1/credits` | Simulated incentive ledger |
+| `GET /api/v1/credits` | Simulated incentive ledger (Bearer token required) |
+| `POST /api/v1/credits/reset` | Reset simulated credit allocations and virtual bank state (Bearer token required) |
 | `GET /api/v1/config` | Current configuration |
 | `POST /api/v1/config` | Validate and persist configuration |
 | `POST /api/v1/model/train` | Retrain forecast models |

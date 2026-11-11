@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, text
+from sqlalchemy import desc, func, or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,13 @@ from app.database import get_db
 from app.energy.simulator import simulate
 from app.ml.predictor import forecast
 from app.ml.train import train_models
-from app.models import ConfigurationRecord, CreditTransaction, ModelTrainingRecord, SimulationRecord
+from app.models import (
+    CommunityBankResetRecord,
+    ConfigurationRecord,
+    CreditTransaction,
+    ModelTrainingRecord,
+    SimulationRecord,
+)
 from app.rate_limits import rate_limit
 from app.security import require_api_token
 from app.schemas import AdvisorRequest, ConfigurationUpdate, ResearchTopic, SimulationParameters
@@ -413,7 +419,7 @@ def simulation_detail(simulation_id: int, db: Session = Depends(get_db)) -> dict
 
 @router.get(
     "/credits",
-    dependencies=[Depends(rate_limit("credits", 15, 60))],
+    dependencies=_protected_dependencies("credits", 15, 100),
 )
 def credits(
     limit: int = Query(default=100, ge=1, le=500),
@@ -435,7 +441,13 @@ def credits(
         by_household[row.household_id] = by_household.get(row.household_id, 0.0) + row.credits
         household_energy[row.household_id] = household_energy.get(row.household_id, 0.0) + row.energy_kwh
 
-    latest = db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
+    latest_simulation_query = db.query(SimulationRecord)
+    reset_record = db.get(CommunityBankResetRecord, 1)
+    if reset_record and reset_record.through_simulation_id is not None:
+        latest_simulation_query = latest_simulation_query.filter(
+            SimulationRecord.id > reset_record.through_simulation_id
+        )
+    latest = latest_simulation_query.order_by(desc(SimulationRecord.created_at)).first()
     if latest:
         latest_result = json.loads(latest.result_json)
         bank_parameters = latest_result.get("parameters") or {}
@@ -497,6 +509,77 @@ def credits(
             "Virtual storage and simulated micro-credit allocations only; not household-metered "
             "contributions, real storage, money, or a payment instrument."
         ),
+    }
+
+
+def _upsert_community_bank_reset(
+    db: Session,
+    through_simulation_id: int | None,
+    reset_at: datetime,
+) -> None:
+    values = {
+        "id": 1,
+        "through_simulation_id": through_simulation_id,
+        "reset_at": reset_at,
+    }
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:
+        raise RuntimeError(f"Community bank reset is not supported for {dialect!r}.")
+
+    statement = insert(CommunityBankResetRecord).values(**values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[CommunityBankResetRecord.id],
+        set_={
+            "through_simulation_id": through_simulation_id,
+            "reset_at": reset_at,
+        },
+    )
+    db.execute(statement)
+
+
+@router.post(
+    "/credits/reset",
+    dependencies=_protected_dependencies("credits_reset", 3, 10),
+)
+def reset_community_bank(db: Session = Depends(get_db)) -> dict:
+    try:
+        through_simulation_id = db.query(func.max(SimulationRecord.id)).scalar()
+        contribution_query = db.query(CreditTransaction).filter(
+            CreditTransaction.transaction_type == "community_contribution"
+        )
+        if through_simulation_id is not None:
+            contribution_query = contribution_query.filter(
+                or_(
+                    CreditTransaction.simulation_id.is_(None),
+                    CreditTransaction.simulation_id <= through_simulation_id,
+                )
+            )
+        deleted_count = contribution_query.delete(synchronize_session=False)
+        _upsert_community_bank_reset(
+            db,
+            through_simulation_id,
+            datetime.now(timezone.utc),
+        )
+        db.commit()
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error(
+            "Community bank reset failed exception_class=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Community Energy Bank data could not be reset.",
+        ) from exc
+
+    return {
+        "reset": True,
+        "deleted_credit_transactions": deleted_count,
+        "through_simulation_id": through_simulation_id,
     }
 
 

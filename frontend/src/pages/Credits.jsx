@@ -1,20 +1,75 @@
+import { useEffect, useRef, useState } from "react";
 import { BatteryCharging, Coins, Zap } from "lucide-react";
 import MetricCard from "../components/MetricCard";
+import { errorMessage, getCredits, resetCommunityBank } from "../services/api";
 
-export default function Credits({ credits, loading, error }) {
+export default function Credits({ credits, loading, error, onCreditsUpdated }) {
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetFeedback, setResetFeedback] = useState(null);
+  const resetDialogRef = useRef(null);
   const households = credits?.household_credits || [];
   const transactions = credits?.transactions || [];
   const bank = credits?.energy_bank;
+
+  useEffect(() => {
+    if (confirmReset && resetDialogRef.current && !resetDialogRef.current.open) {
+      resetDialogRef.current.showModal();
+    }
+  }, [confirmReset]);
+
+  const closeResetConfirmation = () => {
+    resetDialogRef.current?.close();
+    setConfirmReset(false);
+  };
+
+  const handleReset = async () => {
+    setResetting(true);
+    setResetFeedback(null);
+    try {
+      await resetCommunityBank();
+      closeResetConfirmation();
+      try {
+        onCreditsUpdated?.(await getCredits());
+        setResetFeedback({ type: "success", message: "Community Energy Bank data was reset." });
+      } catch (requestError) {
+        onCreditsUpdated?.(null);
+        setResetFeedback({
+          type: "error",
+          message: `Data was reset, but the bank view could not be refreshed: ${errorMessage(requestError)}`,
+        });
+      }
+    } catch (requestError) {
+      setResetFeedback({ type: "error", message: errorMessage(requestError) });
+    } finally {
+      setResetting(false);
+    }
+  };
+
   if (!credits) {
     return (
       <div className="page-stack">
         <div className="page-heading">
           <div><h1>Community Energy Bank</h1><p>Virtual storage and simulated household micro-credit allocations.</p></div>
-          <span className="simulated-pill"><span /> Simulation only</span>
+          <div className="bank-heading-actions">
+            <button className="button secondary" type="button" onClick={() => setConfirmReset(true)} disabled={resetting}>
+              Reset Data
+            </button>
+            <span className="simulated-pill"><span /> Simulation only</span>
+          </div>
         </div>
+        {resetFeedback && <div className={resetFeedback.type === "error" ? "error-banner" : "success-banner"} role={resetFeedback.type === "error" ? "alert" : "status"}>{resetFeedback.message}</div>}
         <div className={error ? "error-banner" : "empty-panel"} role={error ? "alert" : undefined}>
           {error || (loading ? "Loading the community energy bank…" : "Community bank data is unavailable.")}
         </div>
+        <ResetConfirmationDialog
+          dialogRef={resetDialogRef}
+          resetting={resetting}
+          feedback={resetFeedback}
+          onCancel={closeResetConfirmation}
+          onConfirm={handleReset}
+          onClose={() => setConfirmReset(false)}
+        />
       </div>
     );
   }
@@ -25,8 +80,14 @@ export default function Credits({ credits, loading, error }) {
           <h1>Community Energy Bank</h1>
           <p>Virtual storage state and simulated household micro-credit allocations.</p>
         </div>
-        <span className="simulated-pill"><span /> Virtual · simulated</span>
+        <div className="bank-heading-actions">
+          <button className="button secondary" type="button" onClick={() => setConfirmReset(true)} disabled={resetting}>
+            Reset Data
+          </button>
+          <span className="simulated-pill"><span /> Virtual · simulated</span>
+        </div>
       </div>
+      {resetFeedback && <div className={resetFeedback.type === "error" ? "error-banner" : "success-banner"} role={resetFeedback.type === "error" ? "alert" : "status"}>{resetFeedback.message}</div>}
       {error && <div className="error-banner" role="alert">{error} Showing the last available bank data.</div>}
       <div className="metric-grid bank-metrics">
         <MetricCard label="Virtual storage capacity" value={bank?.capacity_kwh ?? "—"} unit="kWh" icon={BatteryCharging} detail="Abstract simulated storage" tone="amber" />
@@ -57,6 +118,43 @@ export default function Credits({ credits, loading, error }) {
         </section>
       </div>
       <div className="notice">{credits.notice || "Virtual storage and simulated credits only; not real assets or payments."}{credits.excluded_transactions ? ` ${credits.excluded_transactions} invalid or duplicate ledger rows were excluded.` : ""}</div>
+      <ResetConfirmationDialog
+        dialogRef={resetDialogRef}
+        resetting={resetting}
+        feedback={resetFeedback}
+        onCancel={closeResetConfirmation}
+        onConfirm={handleReset}
+        onClose={() => setConfirmReset(false)}
+      />
     </div>
+  );
+}
+
+function ResetConfirmationDialog({ dialogRef, resetting, feedback, onCancel, onConfirm, onClose }) {
+  return (
+    <dialog
+      className="confirm-dialog"
+      ref={dialogRef}
+      aria-labelledby="reset-dialog-title"
+      onCancel={onClose}
+      onClose={onClose}
+    >
+      <h2 id="reset-dialog-title">Reset Community Energy Bank data?</h2>
+      <p>
+        This resets simulated household credit allocations, virtual bank balances, and their
+        associated simulated transaction records. Simulation history and unrelated data are preserved.
+      </p>
+      {feedback?.type === "error" && (
+        <p className="reset-dialog-error" role="alert">{feedback.message}</p>
+      )}
+      <div className="confirm-dialog-actions">
+        <button className="button secondary" type="button" onClick={onCancel} disabled={resetting}>
+          Cancel
+        </button>
+        <button className="button primary" type="button" onClick={onConfirm} disabled={resetting}>
+          {resetting ? "Resetting…" : "Confirm Reset"}
+        </button>
+      </div>
+    </dialog>
   );
 }

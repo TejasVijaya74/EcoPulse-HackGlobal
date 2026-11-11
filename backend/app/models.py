@@ -40,6 +40,14 @@ class CreditTransaction(Base):
     transaction_type: Mapped[str] = mapped_column(String(40))
 
 
+class CommunityBankResetRecord(Base):
+    __tablename__ = "community_bank_resets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    through_simulation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class ModelTrainingRecord(Base):
     __tablename__ = "model_training"
 

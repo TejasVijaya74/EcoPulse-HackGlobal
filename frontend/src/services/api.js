@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_ACCESS_TOKEN_KEY = "ecopulse-api-access-token";
+let apiAccessToken = "";
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL
@@ -9,19 +9,18 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((request) => {
-  const token = window.sessionStorage.getItem(API_ACCESS_TOKEN_KEY);
-  if (token) request.headers.Authorization = `Bearer ${token}`;
+  if (apiAccessToken && !request.headers.Authorization) {
+    request.headers.Authorization = `Bearer ${apiAccessToken}`;
+  }
   return request;
 });
 
 export function getApiAccessToken() {
-  return window.sessionStorage.getItem(API_ACCESS_TOKEN_KEY) || "";
+  return apiAccessToken;
 }
 
 export function setApiAccessToken(token) {
-  const value = token.trim();
-  if (value) window.sessionStorage.setItem(API_ACCESS_TOKEN_KEY, value);
-  else window.sessionStorage.removeItem(API_ACCESS_TOKEN_KEY);
+  apiAccessToken = token.trim();
 }
 
 export function errorMessage(error) {
@@ -32,6 +31,9 @@ export const getDashboard = () => api.get("/dashboard").then((response) => respo
 export const getForecast = () => api.get("/forecast").then((response) => response.data);
 export const getCredits = () => api.get("/credits").then((response) => response.data);
 export const getConfig = () => api.get("/config").then((response) => response.data);
+export const validateApiAccessToken = (token) =>
+  api.get("/credits", { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.data);
+export const resetCommunityBank = () => api.post("/credits/reset").then((response) => response.data);
 export const runSimulation = (parameters) => api.post("/simulate", parameters).then((response) => response.data);
 export const getEnergyIntelligence = (location) =>
   api.get("/intelligence/overview", { params: { location } }).then((response) => response.data);

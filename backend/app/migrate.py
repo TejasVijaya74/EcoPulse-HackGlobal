@@ -7,7 +7,13 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
 from app.database import Base, engine
-from app.models import ConfigurationRecord, CreditTransaction, ModelTrainingRecord, SimulationRecord  # noqa: F401
+from app.models import (  # noqa: F401
+    CommunityBankResetRecord,
+    ConfigurationRecord,
+    CreditTransaction,
+    ModelTrainingRecord,
+    SimulationRecord,
+)
 from app.rate_limits import ensure_rate_limit_storage
 
 logger = logging.getLogger(__name__)

@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { Activity, BatteryCharging, Coins, LayoutDashboard, Network, Sun } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Activity, BatteryCharging, Coins, LayoutDashboard, Network, Sun, X } from "lucide-react";
 import useLiveTelemetry from "./hooks/useLiveTelemetry";
 import {
   errorMessage,
@@ -10,6 +10,7 @@ import {
   getForecast,
   runSimulation,
   setApiAccessToken,
+  validateApiAccessToken,
 } from "./services/api";
 
 const Overview = lazy(() => import("./pages/Overview"));
@@ -38,17 +39,33 @@ export default function App() {
   const [error, setError] = useState("");
   const [apiToken, setApiToken] = useState(getApiAccessToken);
   const [tokenDraft, setTokenDraft] = useState(getApiAccessToken);
+  const [validatingToken, setValidatingToken] = useState(false);
+  const [accessError, setAccessError] = useState("");
+  const [accessMessage, setAccessMessage] = useState("");
+  const accessDetailsRef = useRef(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [dashboardData, forecastData, creditsData, configData] = await Promise.all([
-        getDashboard(), getForecast(), getCredits(), getConfig(),
-      ]);
+      const [dashboardData, forecastData] = await Promise.all([getDashboard(), getForecast()]);
       setDashboard(dashboardData);
       setForecast(forecastData);
-      setCredits(creditsData);
-      setConfig(configData);
-      setError("");
+      const [creditsResult, configResult] = await Promise.allSettled([getCredits(), getConfig()]);
+      if (creditsResult.status === "fulfilled") {
+        setCredits(creditsResult.value);
+      } else {
+        setCredits(null);
+      }
+      if (configResult.status === "fulfilled") {
+        setConfig(configResult.value);
+      } else {
+        setConfig(null);
+      }
+      if (creditsResult.status === "fulfilled" && configResult.status === "fulfilled") {
+        setError("");
+      } else {
+        const failure = creditsResult.status === "rejected" ? creditsResult.reason : configResult.reason;
+        setError(errorMessage(failure));
+      }
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -65,18 +82,46 @@ export default function App() {
   const applyTelemetryFallback = useCallback((data) => setDashboard(data), []);
   const { telemetry, connection } = useLiveTelemetry(applyTelemetryFallback);
 
-  const saveApiToken = (event) => {
+  const saveApiToken = async (event) => {
     event.preventDefault();
     const token = tokenDraft.trim();
-    setApiAccessToken(token);
-    setApiToken(token);
-    setTokenDraft(token);
+    if (!token) {
+      setAccessError("Enter a bearer token to continue.");
+      setAccessMessage("");
+      return;
+    }
+
+    setValidatingToken(true);
+    setAccessError("");
+    setAccessMessage("");
+    try {
+      await validateApiAccessToken(token);
+      setApiAccessToken(token);
+      setApiToken(token);
+      setTokenDraft(token);
+      setAccessMessage("Access token verified.");
+      refresh();
+    } catch (requestError) {
+      setAccessError(errorMessage(requestError));
+    } finally {
+      setValidatingToken(false);
+    }
   };
 
   const clearApiToken = () => {
     setApiAccessToken("");
     setApiToken("");
     setTokenDraft("");
+    setCredits(null);
+    setConfig(null);
+    setAccessError("");
+    setAccessMessage("");
+  };
+
+  const closeAccessDialog = () => {
+    if (!accessDetailsRef.current) return;
+    accessDetailsRef.current.open = false;
+    accessDetailsRef.current.querySelector("summary")?.focus();
   };
 
   const handleSimulation = async (parameters) => {
@@ -114,7 +159,14 @@ export default function App() {
     forecast: <Forecast forecast={forecast} />,
     twin: <DigitalTwin telemetry={telemetry} dashboard={dashboard} />,
     simulation: <Simulation config={config} result={simulation} running={running} onRun={handleSimulation} />,
-    credits: <Credits credits={credits} loading={loading} error={error} />,
+    credits: (
+      <Credits
+        credits={credits}
+        loading={loading}
+        error={error}
+        onCreditsUpdated={setCredits}
+      />
+    ),
   }[page];
 
   return (
@@ -142,22 +194,50 @@ export default function App() {
           <div className="mobile-brand"><BatteryCharging size={19} /> EcoPulse</div>
           <div className="breadcrumb">EcoPulse <span>/</span> {titles[page]}</div>
           <div className="topbar-actions">
-            <details className="api-access">
+            <details className="api-access" ref={accessDetailsRef}>
               <summary>{apiToken ? "Access set" : "Set access"}</summary>
-              <form onSubmit={saveApiToken}>
+              <form
+                onSubmit={saveApiToken}
+                role="dialog"
+                aria-labelledby="access-dialog-title"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") closeAccessDialog();
+                }}
+              >
+                <div className="access-dialog-heading">
+                  <strong id="access-dialog-title">Set access</strong>
+                  <button
+                    className="access-close"
+                    type="button"
+                    onClick={closeAccessDialog}
+                    aria-label="Close access dialog"
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </div>
                 <label htmlFor="api-access-token">Backend bearer token</label>
                 <input
                   id="api-access-token"
                   type="password"
                   autoComplete="off"
+                  aria-invalid={Boolean(accessError)}
+                  aria-describedby={accessError ? "access-error" : "access-help"}
                   value={tokenDraft}
-                  onChange={(event) => setTokenDraft(event.target.value)}
+                  onChange={(event) => {
+                    setTokenDraft(event.target.value);
+                    setAccessError("");
+                    setAccessMessage("");
+                  }}
                 />
                 <div>
-                  <button className="button primary" type="submit" disabled={!tokenDraft.trim()}>Use token</button>
-                  {apiToken && <button className="button secondary" type="button" onClick={clearApiToken}>Clear</button>}
+                  <button className="button primary" type="submit" disabled={validatingToken}>
+                    {validatingToken ? "Validating…" : "Submit"}
+                  </button>
+                  {apiToken && <button className="button secondary" type="button" onClick={clearApiToken} disabled={validatingToken}>Clear</button>}
                 </div>
-                <small>Kept in this tab only; protected requests verify it with the backend.</small>
+                {accessError && <small className="access-feedback error" id="access-error" role="alert">{accessError}</small>}
+                {accessMessage && <small className="access-feedback success" role="status">{accessMessage}</small>}
+                <small id="access-help">Kept in this tab only; protected requests verify it with the backend.</small>
               </form>
             </details>
             <div className={`api-state ${error ? "error" : ""}`}><span /> {error ? "Connection issue" : loading ? "Connecting" : "API connected"}</div>

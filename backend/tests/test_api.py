@@ -302,7 +302,7 @@ def test_simulation_is_saved_and_creates_credit_ledger_entries(auth_headers):
         assert detail.status_code == 200
         history = client.get("/api/v1/simulation/history")
         assert any(item["id"] == result["id"] for item in history.json()["items"])
-        ledger = client.get("/api/v1/credits").json()
+        ledger = client.get("/api/v1/credits", headers=auth_headers).json()
         assert ledger["total_credits"] >= result["metrics"]["community_credits"]
         simulation_transactions = [
             item for item in ledger["transactions"] if item["simulation_id"] == result["id"]
@@ -393,7 +393,9 @@ def test_duplicate_household_transaction_invalidates_simulation_contribution_in_
     auth_headers,
 ):
     with TestClient(app) as client:
-        credits_before = client.get("/api/v1/credits").json()["total_credits"]
+        credits_before = client.get(
+            "/api/v1/credits", headers=auth_headers
+        ).json()["total_credits"]
         response = client.post(
             "/api/v1/simulate",
             json=production_simulation_payload(),
@@ -422,7 +424,7 @@ def test_duplicate_household_transaction_invalidates_simulation_contribution_in_
             duplicate_id = duplicate.id
 
         try:
-            ledger = client.get("/api/v1/credits").json()
+            ledger = client.get("/api/v1/credits", headers=auth_headers).json()
             assert ledger["total_credits"] == credits_before
             assert ledger["excluded_transactions"] >= 2
             assert all(item["simulation_id"] != result["id"] for item in ledger["transactions"])
