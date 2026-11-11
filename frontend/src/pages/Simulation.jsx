@@ -35,7 +35,7 @@ const scenarioDescriptions = {
   storage_constraints: "Halves configured storage charge and discharge power limits.",
 };
 
-export default function Simulation({ config, result, running, onRun }) {
+export default function Simulation({ config, result, running, onRun, publicDemoMode }) {
   const [form, setForm] = useState(null);
   useEffect(() => {
     if (config) setForm({ ...config, scenario: "normal", duration_hours: 48 });
@@ -77,7 +77,7 @@ export default function Simulation({ config, result, running, onRun }) {
       <div className="page-heading">
         <div>
           <h1>Scenario simulation</h1>
-          <p>Adjust neighborhood assumptions and run a 48-hour dispatch simulation.</p>
+          <p>{publicDemoMode ? "Run a bounded 48-hour preview; public demo runs are not saved." : "Adjust neighborhood assumptions and run a 48-hour dispatch simulation."}</p>
         </div>
         <span className="simulated-pill"><span /> Simulated scenario</span>
       </div>
@@ -90,7 +90,7 @@ export default function Simulation({ config, result, running, onRun }) {
             <small className="scenario-description">{scenarioDescriptions[form.scenario]}</small>
           </label>
           <label>Households
-            <input type="number" min="1" max="5000" value={form.households} onChange={(event) => set("households", event.target.value)} />
+            <input type="number" min="1" max={publicDemoMode ? 250 : 5000} value={form.households} onChange={(event) => set("households", event.target.value)} />
           </label>
           <label>Solar capacity <span>{form.solar_capacity_kw} kW</span>
             <input type="range" min="0" max="500" step="5" value={form.solar_capacity_kw} onChange={(event) => set("solar_capacity_kw", event.target.value)} />

@@ -1,6 +1,13 @@
 import axios from "axios";
 
-const API_ACCESS_TOKEN_KEY = "ecopulse-api-access-token";
+let apiAccessToken = "";
+if (typeof window !== "undefined") {
+  try {
+    window.sessionStorage.removeItem("ecopulse-api-access-token");
+  } catch {
+    console.warn("Could not clear the previously stored API token.");
+  }
+}
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL
@@ -9,30 +16,31 @@ const api = axios.create({
 });
 
 api.interceptors.request.use((request) => {
-  const token = window.sessionStorage.getItem(API_ACCESS_TOKEN_KEY);
-  if (token) request.headers.Authorization = `Bearer ${token}`;
+  if (apiAccessToken) request.headers.Authorization = `Bearer ${apiAccessToken}`;
   return request;
 });
 
 export function getApiAccessToken() {
-  return window.sessionStorage.getItem(API_ACCESS_TOKEN_KEY) || "";
+  return apiAccessToken;
 }
 
 export function setApiAccessToken(token) {
-  const value = token.trim();
-  if (value) window.sessionStorage.setItem(API_ACCESS_TOKEN_KEY, value);
-  else window.sessionStorage.removeItem(API_ACCESS_TOKEN_KEY);
+  apiAccessToken = token.trim();
 }
 
 export function errorMessage(error) {
-  return error.response?.data?.detail || error.message || "Unable to reach the EcoPulse API.";
+  if (typeof error.response?.data?.detail === "string") return error.response.data.detail;
+  return error.message || "Unable to reach the EcoPulse API.";
 }
 
+export const getPublicDemoStatus = () => api.get("/demo/status").then((response) => response.data);
 export const getDashboard = () => api.get("/dashboard").then((response) => response.data);
 export const getForecast = () => api.get("/forecast").then((response) => response.data);
+export const getDemoConfig = () => api.get("/demo/config").then((response) => response.data);
 export const getCredits = () => api.get("/credits").then((response) => response.data);
 export const getConfig = () => api.get("/config").then((response) => response.data);
 export const runSimulation = (parameters) => api.post("/simulate", parameters).then((response) => response.data);
+export const runDemoSimulation = (parameters) => api.post("/demo/simulate", parameters).then((response) => response.data);
 export const getEnergyIntelligence = (location) =>
   api.get("/intelligence/overview", { params: { location } }).then((response) => response.data);
 export const getEnergyResearch = (topic) =>

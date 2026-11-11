@@ -6,11 +6,18 @@ const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
 const socketUrl = import.meta.env.VITE_WS_URL
   || `${apiBaseUrl.replace(/^http/, "ws").replace(/\/api\/v1\/?$/, "")}/ws/grid-telemetry`;
 
-export default function useLiveTelemetry(onFallback) {
+export default function useLiveTelemetry(publicDemoMode, apiToken, onFallback) {
   const [telemetry, setTelemetry] = useState(null);
   const [connection, setConnection] = useState("connecting");
 
   useEffect(() => {
+    if (publicDemoMode === null) return undefined;
+    if (!publicDemoMode && !apiToken) {
+      setTelemetry(null);
+      setConnection("offline");
+      return undefined;
+    }
+
     let active = true;
     let socket;
     let retryTimer;
@@ -31,6 +38,9 @@ export default function useLiveTelemetry(onFallback) {
         socket = new WebSocket(socketUrl);
         socket.onopen = () => {
           if (!active) return;
+          if (!publicDemoMode) {
+            socket.send(JSON.stringify({ type: "auth", token: apiToken }));
+          }
           setConnection("live");
           polling = false;
           window.clearInterval(pollTimer);
@@ -68,7 +78,7 @@ export default function useLiveTelemetry(onFallback) {
       window.clearInterval(pollTimer);
       socket?.close();
     };
-  }, [onFallback]);
+  }, [apiToken, onFallback, publicDemoMode]);
 
   return { telemetry, connection };
 }

@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy import desc, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -15,8 +15,19 @@ from app.ml.predictor import forecast
 from app.ml.train import train_models
 from app.models import ConfigurationRecord, CreditTransaction, ModelTrainingRecord, SimulationRecord
 from app.rate_limits import rate_limit
-from app.security import require_api_token
-from app.schemas import AdvisorRequest, ConfigurationUpdate, ResearchTopic, SimulationParameters
+from app.security import (
+    has_valid_api_token,
+    public_demo_mode_enabled,
+    require_api_token,
+    require_public_demo_or_api_token,
+)
+from app.schemas import (
+    AdvisorRequest,
+    ConfigurationUpdate,
+    DemoSimulationParameters,
+    ResearchTopic,
+    SimulationParameters,
+)
 from app.services.advisor import (
     AdvisorNotConfigured,
     AdvisorRateLimited,
@@ -74,6 +85,69 @@ def _protected_dependencies(
     ]
 
 
+def _demo_or_protected_dependencies(
+    name: str,
+    client_limit: int,
+    global_limit: int,
+    window_seconds: int = 60,
+    *,
+    public_client_limit: int | None = None,
+    public_global_limit: int | None = None,
+    public_window_seconds: int | None = None,
+) -> list:
+    return [
+        Depends(require_public_demo_or_api_token),
+        Depends(
+            _conditional_rate_limit(
+                name,
+                client_limit,
+                window_seconds,
+                public_client_limit or client_limit,
+                public_window_seconds or window_seconds,
+            )
+        ),
+        Depends(
+            _conditional_rate_limit(
+                name,
+                global_limit,
+                window_seconds,
+                public_global_limit or global_limit,
+                public_window_seconds or window_seconds,
+                scope="global",
+            )
+        ),
+    ]
+
+
+def _conditional_rate_limit(
+    name: str,
+    regular_limit: int,
+    regular_window_seconds: int,
+    public_limit: int,
+    public_window_seconds: int,
+    *,
+    scope: str = "client",
+):
+    def enforce(request: Request, db: Session = Depends(get_db)) -> None:
+        public_request = _is_anonymous_public_demo(request)
+        limit = public_limit if public_request else regular_limit
+        window_seconds = public_window_seconds if public_request else regular_window_seconds
+        bucket_name = f"public_demo_{name}" if public_request else name
+        rate_limit(
+            bucket_name,
+            limit,
+            window_seconds,
+            scope=scope,
+        )(request, db)
+
+    enforce.__name__ = f"conditional_rate_limit_{scope}_{name}"
+    return enforce
+
+
+def _is_anonymous_public_demo(request: Request) -> bool:
+    return public_demo_mode_enabled() and not has_valid_api_token(request)
+
+
 def _weather_http_exception(exc: WeatherAPIError) -> HTTPException:
     if isinstance(exc, WeatherNotConfigured):
         return HTTPException(status_code=503, detail=str(exc))
@@ -107,7 +181,43 @@ def current_config(db: Session) -> dict:
     return json.loads(record.values_json)
 
 
-@router.get("/health")
+@router.get(
+    "/demo/status",
+    dependencies=[
+        Depends(rate_limit("demo_status", 60, 60)),
+        Depends(rate_limit("demo_status", 600, 60, scope="global")),
+    ],
+)
+def demo_status(response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return {"public_demo_mode": public_demo_mode_enabled()}
+
+
+@router.get(
+    "/demo/config",
+    dependencies=_demo_or_protected_dependencies("config", 30, 120),
+)
+def demo_config() -> dict:
+    public_fields = (
+        "households",
+        "solar_capacity_kw",
+        "storage_capacity_kwh",
+        "initial_storage_percent",
+        "grid_import_limit_kw",
+        "grid_export_limit_kw",
+        "cloud_cover",
+        "temperature_c",
+        "demand_multiplier",
+        "grid_available",
+        "random_seed",
+    )
+    return {key: DEFAULT_CONFIG[key] for key in public_fields}
+
+
+@router.get(
+    "/health",
+    dependencies=[Depends(require_api_token)],
+)
 def health(db: Session = Depends(get_db)) -> dict:
     try:
         db.execute(text("SELECT 1"))
@@ -120,11 +230,16 @@ def health(db: Session = Depends(get_db)) -> dict:
 
 @router.get(
     "/dashboard",
-    dependencies=[Depends(rate_limit("dashboard", 30, 60))],
+    dependencies=_demo_or_protected_dependencies("dashboard", 30, 300),
 )
-def dashboard(db: Session = Depends(get_db)) -> dict:
-    config = current_config(db)
-    latest = db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
+def dashboard(request: Request, db: Session = Depends(get_db)) -> dict:
+    public_preview = _is_anonymous_public_demo(request)
+    config = DEFAULT_CONFIG.copy() if public_preview else current_config(db)
+    latest = (
+        None
+        if public_preview
+        else db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
+    )
     if latest:
         result = dashboard_from_result(json.loads(latest.result_json))
     else:
@@ -141,13 +256,14 @@ def dashboard(db: Session = Depends(get_db)) -> dict:
 
 @router.get(
     "/forecast",
-    dependencies=[Depends(rate_limit("forecast", 20, 60))],
+    dependencies=_demo_or_protected_dependencies("forecast", 20, 240),
 )
 def get_forecast(
+    request: Request,
     hours: int = Query(default=24, ge=1, le=48),
     db: Session = Depends(get_db),
 ) -> dict:
-    config = current_config(db)
+    config = DEFAULT_CONFIG.copy() if _is_anonymous_public_demo(request) else current_config(db)
     try:
         prediction = forecast(hours, config["households"], config["solar_capacity_kw"])
     except (ValueError, OSError) as exc:
@@ -204,13 +320,26 @@ def weather_location_search(query: str = Query(min_length=1, max_length=120)) ->
 
 @router.get(
     "/intelligence/overview",
-    dependencies=_protected_dependencies("weather", 20, 100),
+    dependencies=_demo_or_protected_dependencies(
+        "weather",
+        20,
+        100,
+        public_client_limit=10,
+        public_global_limit=120,
+        public_window_seconds=3600,
+    ),
 )
 def energy_intelligence_overview(
-    location: str | None = Query(default=None, min_length=1, max_length=120),
+    request: Request,
+    location: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[\w][\w\s,.'()-]*$",
+    ),
     db: Session = Depends(get_db),
 ) -> dict:
-    config = current_config(db)
+    config = DEFAULT_CONFIG.copy() if _is_anonymous_public_demo(request) else current_config(db)
     try:
         weather_data = get_weatherapi_forecast(location or WEATHERAPI_DEFAULT_LOCATION, 3)
     except WeatherAPIError as exc:
@@ -227,7 +356,14 @@ def energy_intelligence_overview(
 
 @router.get(
     "/intelligence/research",
-    dependencies=_protected_dependencies("research", 10, 50),
+    dependencies=_demo_or_protected_dependencies(
+        "research",
+        10,
+        50,
+        public_client_limit=6,
+        public_global_limit=30,
+        public_window_seconds=3600,
+    ),
 )
 def energy_research(topic: ResearchTopic = Query(default="solar")) -> dict:
     try:
@@ -238,12 +374,7 @@ def energy_research(topic: ResearchTopic = Query(default="solar")) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-@router.post(
-    "/simulate",
-    dependencies=_protected_dependencies("simulate", 6, 30),
-)
-def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_db)) -> dict:
-    config = current_config(db)
+def calculate_simulation(parameters: SimulationParameters, config: dict) -> dict:
     result = simulate(parameters, config)
     baseline_result = simulate(parameters, config, dispatch_strategy="baseline")
     result["optimization_comparison"] = build_optimization_comparison(baseline_result, result)
@@ -260,6 +391,27 @@ def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_d
         "scenario_label": "Normal Conditions",
         "metrics": normal_result["metrics"],
     }
+    return result
+
+
+@router.post(
+    "/demo/simulate",
+    dependencies=_demo_or_protected_dependencies("simulate", 5, 50, 3600),
+)
+def run_demo_simulation(parameters: DemoSimulationParameters) -> dict:
+    result = calculate_simulation(parameters, DEFAULT_CONFIG.copy())
+    result["created_at"] = datetime.now(timezone.utc).isoformat()
+    result["simulated"] = True
+    result["persisted"] = False
+    return result
+
+
+@router.post(
+    "/simulate",
+    dependencies=_protected_dependencies("simulate", 6, 30),
+)
+def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_db)) -> dict:
+    result = calculate_simulation(parameters, current_config(db))
     record = SimulationRecord(
         scenario=parameters.scenario,
         parameters_json=json.dumps(result["parameters"]),
@@ -327,13 +479,25 @@ def run_simulation(parameters: SimulationParameters, db: Session = Depends(get_d
 
 @router.post(
     "/advisor",
-    dependencies=_protected_dependencies("advisor", 3, 15),
+    dependencies=_demo_or_protected_dependencies(
+        "advisor",
+        3,
+        15,
+        public_client_limit=2,
+        public_global_limit=20,
+        public_window_seconds=3600,
+    ),
 )
-async def energy_advisor(request: AdvisorRequest, db: Session = Depends(get_db)) -> dict:
+async def energy_advisor(request: Request, advisor_request: AdvisorRequest, db: Session = Depends(get_db)) -> dict:
     if not GROQ_API_KEY:
         raise HTTPException(status_code=503, detail="The Energy Advisor is not configured.")
 
-    latest = db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
+    public_preview = _is_anonymous_public_demo(request)
+    latest = (
+        None
+        if public_preview
+        else db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
+    )
     if latest:
         result = json.loads(latest.result_json)
         if "carbon_impact" not in result:
@@ -343,7 +507,8 @@ async def energy_advisor(request: AdvisorRequest, db: Session = Depends(get_db))
                 (result.get("parameters") or {}).get("households"),
             )
     else:
-        result = create_dashboard_preview(current_config(db))
+        config = DEFAULT_CONFIG.copy() if public_preview else current_config(db)
+        result = create_dashboard_preview(config)
 
     context = build_advisor_context(result)
     try:
@@ -353,21 +518,21 @@ async def energy_advisor(request: AdvisorRequest, db: Session = Depends(get_db))
         )
     except WeatherAPIError:
         context["external_weather"] = {"available": False, "reason": "WeatherAPI data is unavailable."}
-    if request.research_topic:
+    if advisor_request.research_topic and not public_preview:
         try:
             context["energy_research"] = await asyncio.to_thread(
                 search_research,
-                request.research_topic,
+                advisor_request.research_topic,
             )
         except (ResearchNotConfigured, ResearchRateLimited, ResearchTimeout, ResearchUnavailable, ResearchInvalidResponse):
             context["energy_research"] = {
                 "available": False,
                 "reason": "Energy research is unavailable.",
-                "topic": request.research_topic,
+                "topic": advisor_request.research_topic,
             }
 
     try:
-        answer = await ask_energy_advisor(request.question, context)
+        answer = await ask_energy_advisor(advisor_request.question, context)
     except AdvisorNotConfigured as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AdvisorRateLimited as exc:
@@ -384,7 +549,10 @@ async def energy_advisor(request: AdvisorRequest, db: Session = Depends(get_db))
     }
 
 
-@router.get("/simulation/history")
+@router.get(
+    "/simulation/history",
+    dependencies=_protected_dependencies("simulation_history", 30, 120),
+)
 def simulation_history(
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -403,7 +571,10 @@ def simulation_history(
     }
 
 
-@router.get("/simulation/{simulation_id}")
+@router.get(
+    "/simulation/{simulation_id}",
+    dependencies=_protected_dependencies("simulation_detail", 60, 240),
+)
 def simulation_detail(simulation_id: int, db: Session = Depends(get_db)) -> dict:
     record = db.get(SimulationRecord, simulation_id)
     if record is None:
@@ -413,7 +584,7 @@ def simulation_detail(simulation_id: int, db: Session = Depends(get_db)) -> dict
 
 @router.get(
     "/credits",
-    dependencies=[Depends(rate_limit("credits", 15, 60))],
+    dependencies=_protected_dependencies("credits", 15, 100),
 )
 def credits(
     limit: int = Query(default=100, ge=1, le=500),
@@ -500,7 +671,10 @@ def credits(
     }
 
 
-@router.get("/config")
+@router.get(
+    "/config",
+    dependencies=_protected_dependencies("config_read", 30, 120),
+)
 def get_config(db: Session = Depends(get_db)) -> dict:
     return current_config(db)
 

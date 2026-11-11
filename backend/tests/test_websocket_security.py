@@ -49,6 +49,7 @@ def websocket_client(monkeypatch):
         },
     )
     monkeypatch.setattr(telemetry, "CORS_ORIGINS", ("https://preview.example",))
+    monkeypatch.setattr(telemetry, "public_demo_mode_enabled", lambda: True)
     monkeypatch.setattr(telemetry, "_active_connections", 0)
     monkeypatch.setattr(telemetry, "_active_connections_by_client", {})
 
@@ -95,4 +96,33 @@ def test_telemetry_rejects_excess_connections_for_same_client(
             ):
                 pass
 
+    assert telemetry._active_connections == 0
+
+
+def test_telemetry_requires_bearer_auth_when_demo_mode_is_disabled(
+    websocket_client, monkeypatch
+):
+    monkeypatch.setattr(telemetry, "public_demo_mode_enabled", lambda: False)
+    monkeypatch.setattr(
+        telemetry,
+        "is_valid_api_token",
+        lambda value: value == "valid-test-token",
+    )
+
+    with pytest.raises(WebSocketDisconnect):
+        with websocket_client.websocket_connect(
+            "/ws/grid-telemetry",
+            headers={"origin": "https://preview.example"},
+        ) as socket:
+            socket.send_json({"type": "auth", "token": "invalid"})
+            socket.receive_json()
+
+    with websocket_client.websocket_connect(
+        "/ws/grid-telemetry",
+        headers={"origin": "https://preview.example"},
+    ) as socket:
+        socket.send_json({"type": "auth", "token": "valid-test-token"})
+        payload = socket.receive_json()
+
+    assert payload["simulated"] is True
     assert telemetry._active_connections == 0
