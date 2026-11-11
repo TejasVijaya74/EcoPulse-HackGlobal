@@ -82,6 +82,13 @@ export default function App() {
 
   useEffect(() => {
     if (page !== "credits") return undefined;
+    if (publicDemoMode === null) return undefined;
+    if (publicDemoMode) {
+      setCredits(null);
+      setError("");
+      return undefined;
+    }
+
     let active = true;
     getCredits()
       .then((data) => {
@@ -95,7 +102,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [apiToken, page]);
+  }, [apiToken, page, publicDemoMode]);
 
   const applyTelemetryFallback = useCallback((data) => setDashboard(data), []);
   const { telemetry, connection } = useLiveTelemetry(
@@ -146,7 +153,7 @@ export default function App() {
       }));
       const forecastData = await getForecast();
       setForecast(forecastData);
-      if (result.persisted === false) setCredits(null);
+      if (publicDemoMode || result.persisted === false) setCredits(null);
       else setCredits(await getCredits());
     } catch (requestError) {
       setError(errorMessage(requestError));
@@ -161,7 +168,7 @@ export default function App() {
     forecast: <Forecast forecast={forecast} />,
     twin: <DigitalTwin telemetry={telemetry} dashboard={dashboard} />,
     simulation: <Simulation config={config} result={simulation} running={running} onRun={handleSimulation} publicDemoMode={publicDemoMode} />,
-    credits: <Credits credits={credits} loading={loading} error={error} />,
+    credits: <Credits credits={credits} loading={loading} error={error} publicDemoMode={publicDemoMode} />,
   }[page];
 
   return (
