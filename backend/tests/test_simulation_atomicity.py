@@ -9,7 +9,9 @@ from app.main import app
 from app.models import CreditTransaction, SimulationRecord
 
 
-def test_credit_insert_failure_rolls_back_simulation_and_returns_safe_error(caplog):
+def test_credit_insert_failure_rolls_back_simulation_and_returns_safe_error(
+    caplog, auth_headers
+):
     payload = {
         "scenario": "normal",
         "households": 60,
@@ -36,7 +38,11 @@ def test_credit_insert_failure_rolls_back_simulation_and_returns_safe_error(capl
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
             with caplog.at_level(logging.ERROR, logger="app.api.routes"):
-                response = client.post("/api/v1/simulate", json=payload)
+                response = client.post(
+                    "/api/v1/simulate",
+                    json=payload,
+                    headers=auth_headers,
+                )
     finally:
         event.remove(CreditTransaction, "before_insert", fail_credit_insert)
 

@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Scenario = Literal[
     "normal",
@@ -9,6 +9,19 @@ Scenario = Literal[
     "high_demand",
     "grid_outage",
     "low_solar",
+    "evening_peak",
+    "solar_surplus",
+    "storage_constraints",
+]
+
+ResearchTopic = Literal[
+    "solar",
+    "storage",
+    "grid",
+    "india_policy",
+    "community_energy",
+    "climate_risks",
+    "renewables",
 ]
 
 
@@ -57,3 +70,17 @@ class TrainingResponse(BaseModel):
     samples: int
     metrics: dict[str, dict[str, float]]
 
+
+class AdvisorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=1000)
+    research_topic: ResearchTopic | None = None
+
+    @field_validator("question")
+    @classmethod
+    def question_must_not_be_blank(cls, value: str) -> str:
+        question = value.strip()
+        if not question:
+            raise ValueError("Question must not be blank.")
+        return question

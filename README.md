@@ -8,11 +8,15 @@ EcoPulse is a neighborhood energy-management simulation. It forecasts solar gene
 
 - Deterministic hourly synthetic weather, solar, and neighborhood load data.
 - Optional Open-Meteo hourly weather (temperature, cloud cover, shortwave radiation, and wind) with 30-minute response caching and synthetic fallback.
+- Optional WeatherAPI current conditions, hourly/daily forecasts, alerts, location search, and separate relative weather-planning insights.
+- Optional Tavily-cached energy research feed with source URLs and publication dates when provided by the search service.
 - Separate Scikit-learn `RandomForestRegressor` models for solar and demand, chronological holdout evaluation, and a previous-hour baseline.
 - One-day-ahead predictions with approximate uncertainty bands.
 - Capacity-based flywheel dispatch with charge/discharge efficiencies, self-discharge, and power and energy limits.
-- Normal, heatwave, heavy-cloud, high-demand, grid-outage, and low-solar scenarios.
-- Baseline/no-storage comparisons, grid dependency, exports, curtailment, and unserved load.
+- Normal, heatwave, heavy-cloud, high-demand, grid-outage, low-solar, evening-peak, solar-surplus, and storage-constraint scenarios.
+- Matched storage-idle baseline versus EcoPulse dispatch comparisons, grid dependency, exports, curtailment, unserved load, and energy-balance checks.
+- Simulated grid-import carbon estimates and optional Groq-powered energy advice.
+- Virtual community energy bank with validated simulated contribution and micro-credit records.
 - SQLAlchemy persistence with SQLite locally and PostgreSQL for hosted deployments.
 - React dashboard with forecasts, a 2D energy-flow view, simulation controls, credit ledger, REST refresh, and WebSocket telemetry with REST polling fallback.
 
@@ -71,6 +75,26 @@ Copy `backend\.env.example` to `backend\.env` for optional backend overrides and
 
 Set `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`, and `WEATHER_TIMEZONE` to enable Open-Meteo. Coordinates are user-supplied; no location is hardcoded. Open-Meteo requires no API key for ordinary non-commercial usage. Weather responses are cached for 30 minutes, and request/response failures fall back to synthetic weather with a visible source label. The dashboard links to Open-Meteo attribution. Synthetic household demand forecasting is retained regardless of the weather source.
 
+The Ask EcoPulse panel is optional and disabled when `GROQ_API_KEY` is unset. Configure `GROQ_API_KEY`, `GROQ_MODEL`, and `GROQ_API_BASE_URL` only in the backend environment; never put provider credentials in `frontend\.env` or Vite variables. The advisor sends backend simulation metrics, optional WeatherAPI data, and optional Tavily search snippets to Groq's chat-completions API. Weather and research are labelled separately from simulated measurements; web snippets are untrusted and source-linked. The advisor does not participate in simulation calculations. Gemini configuration is reserved and optional; it is not used because Groq already supplies the advisor capability.
+
+Copy `backend\.env.example` to `backend\.env` and add keys locally as needed. WeatherAPI and Tavily are optional; without their keys, their intelligence panels/endpoints report unavailable while the existing forecast, dashboard, simulator, and WebSocket continue working. WeatherAPI requests have an 8-second timeout and a 15-minute cache bounded to 256 successful responses; the UI limits requested forecasts to three days. Tavily uses its news search with a one-month time range, six-result limit, 12-second timeout, and 15-minute cache. Provider errors and quota limits are returned without exposing key-bearing request URLs. Do not commit `backend\.env`.
+
+### API access and request limits
+
+Set a private backend-only `API_ACCESS_TOKEN` to enable simulation writes, configuration updates, model retraining, and WeatherAPI, Tavily, and Groq-backed endpoints. Generate a high-entropy token, for example with `python -c "import secrets; print(secrets.token_urlsafe(32))"`, and configure it in `backend\.env` locally or as a secret environment variable on the backend service. Tokens shorter than 32 characters and missing tokens fail closed; protected requests return an explicit configuration error until a valid token is configured.
+
+The health, dashboard, forecast, configuration-read, simulation-history/detail, and credits-read endpoints remain available without a token to preserve the public dashboard. Expensive reads are rate-limited too. Protected frontend actions send a bearer token entered through **Operator access** in the app header. The frontend keeps it only in the current browser tab's session storage; it is not a Vite build variable and must not be added to `frontend\.env`. This is a shared demo credential, not individual user identity or authorization; distribute it only to trusted operators. A public static site cannot securely hide a shared credential from its users.
+
+Rate limits are enforced against the shared application database, so they apply across backend workers. A separate `api_rate_limit_windows` table is created by the additive startup migration; it does not change application tables or existing migration behavior. Authentication runs before protected-route rate limiting, so invalid or missing bearer tokens do not write rate-limit rows. Expired buckets are cleaned at most once per minute per worker. Per-client limits are supplemented with global limits on authenticated operations: simulation 6/minute per client and 30/minute globally; advisor 3/minute and 15/minute; WeatherAPI 20/minute and 100/minute; Tavily 10/minute and 50/minute; config updates 5/minute and 20/minute; model training 1/hour and 2/hour. Dashboard, forecast, and credits reads are limited to 30, 20, and 15 requests/minute per client, respectively. Requests exceeding a limit return HTTP 429 with `Retry-After`; if shared limiter storage is unavailable, protected operations fail closed with HTTP 503. Client keys use the ASGI peer address and do not trust application-level `X-Forwarded-For` values; confirm the hosting proxy configuration before relying on per-client quotas.
+
+The public simulated telemetry WebSocket accepts browser origins listed in `CORS_ORIGINS`, caps concurrent connections at 100 total and 5 per peer address per backend worker, and continues to provide dashboard telemetry without a bearer token. These are per-worker resource bounds, not user authentication or a substitute for gateway-level connection limits; telemetry values are simulated, and a missing `Origin` header is still allowed for non-browser clients.
+
+WeatherAPI hourly/daily forecasts and alerts are external weather data. The EcoPulse weather adjustment is relative to the configured cloud/temperature planning assumptions: cloud fraction adjusts a relative solar potential using the simulator's existing `0.78` cloud coefficient, and temperature uses the simulator's existing cooling-load coefficient. WeatherAPI solar irradiance is not assumed to be available, and no absolute generation is inferred from cloud cover. This planning adjustment does not change the RandomForest forecast or simulator dispatch. Weather source attribution: [WeatherAPI.com](https://www.weatherapi.com/docs/).
+
+Tavily research snippets are not authoritative facts. They include source URLs and dates only when returned by Tavily; verify policy or technical claims at the linked publisher. Research source: [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).
+
+The default carbon factor is configurable with `GRID_EMISSIONS_FACTOR_KG_CO2_PER_KWH`, `GRID_EMISSIONS_FACTOR_SOURCE`, and `GRID_EMISSIONS_REPORTING_YEAR`. It is applied to simulated grid imports only. The configured CEA Version 19.0 citation and 2022–23 reporting label have not been independently verified against the publication in this environment; do not describe the factor as current or verified until the source document is confirmed.
+
 Example PowerShell settings for a terminal session:
 
 ```powershell
@@ -82,6 +106,8 @@ $env:WEATHER_TIMEZONE = "America/Los_Angeles"
 ## Forecast models
 
 Training uses hour, weekday, month, temperature, cloud cover, irradiance, wind speed, a capacity/irradiance/cloud solar estimate, previous-hour generation/load, trailing three-hour means, and 24-hour lags. Rows are split chronologically (80% train, 20% test). MAE, RMSE, and R² are computed against a previous-hour persistence baseline. Predictions are clamped to non-negative values.
+
+Forecasts are independently displayed estimates; the simulator's dispatch uses its deterministic synthetic solar and demand traces. Forecast predictions do not currently control dispatch.
 
 Retrain using the API:
 
@@ -96,7 +122,9 @@ Invoke-RestMethod -Method Post http://localhost:8000/api/v1/model/train
 - Each dispatch step prioritizes direct solar load, then storage charging in surplus conditions; remaining energy exports within the configured limit and otherwise is curtailed. During deficits, storage discharge supplies load before bounded grid imports. Grid outage imports are exactly zero; remaining unmet demand is reported.
 - Storage uses `E = 0.5 × I × ω²` for ideal rotational energy and a capacity-based kWh state for operation. Charging raises stored energy by input × charging efficiency; discharging removes output ÷ discharging efficiency. Capacity, power, and state bounds are enforced.
 - Stored energy is not counted as new generation. Storage losses, exports, imports, and curtailed energy are reported separately. Credits accrue only for energy accepted into storage or exported for community benefit at the configured credits/kWh rate.
-- The “no-storage baseline” compares the same generated renewable and demand traces without energy storage.
+- The matched storage-idle baseline and optimized dispatch use the same scenario parameters, initial storage state, deterministic solar/demand traces, duration, and random seed. The baseline does not charge or discharge; configured initial storage remains part of its balance and self-discharge is accounted for.
+- Energy balance accounts for renewable generation, grid imports, household consumption served, exports, curtailment, storage losses, initial and ending storage, and unserved energy. The legacy `baseline` response field remains an additive no-storage reference; use `optimization_comparison` for the matched comparison.
+- Carbon values are estimates from simulated grid imports only. Renewable generation and storage flows are not counted again as emissions or avoided emissions.
 
 ## API
 
@@ -105,7 +133,13 @@ Invoke-RestMethod -Method Post http://localhost:8000/api/v1/model/train
 | `GET /api/v1/health` | API and database health |
 | `GET /api/v1/dashboard` | Latest simulation metrics, chart series, and weather-source label |
 | `GET /api/v1/forecast` | Forecast and model scores |
+| `GET /api/v1/intelligence/weather/current` | Optional external current weather |
+| `GET /api/v1/intelligence/weather/forecast` | Optional hourly/daily weather and alerts (1–3 days) |
+| `GET /api/v1/intelligence/weather/search` | Optional WeatherAPI location search |
+| `GET /api/v1/intelligence/overview` | Weather overview and relative planning signals |
+| `GET /api/v1/intelligence/research?topic=solar` | Optional cached Tavily energy research |
 | `POST /api/v1/simulate` | Run and persist a scenario |
+| `POST /api/v1/advisor` | Ask the optional backend-only Groq energy advisor (optional `research_topic`) |
 | `GET /api/v1/simulation/history` | Recent simulation summaries |
 | `GET /api/v1/simulation/{simulation_id}` | Detailed stored simulation |
 | `GET /api/v1/credits` | Simulated incentive ledger |
@@ -144,6 +178,7 @@ Configure these on Render (the Blueprint provides defaults where safe):
 | Variable | Service | Value |
 |---|---|---|
 | `DATABASE_URL` | Backend | Automatically linked PostgreSQL connection string; keep it private |
+| `API_ACCESS_TOKEN` | Backend | High-entropy shared bearer token; configure as a secret and distribute only to trusted operators |
 | `CORS_ORIGINS` | Backend | Exact deployed frontend origin, e.g. `https://ecopulse-frontend.onrender.com` |
 | `WEATHER_LATITUDE` | Backend | Optional latitude for the location you choose |
 | `WEATHER_LONGITUDE` | Backend | Optional longitude for the location you choose |

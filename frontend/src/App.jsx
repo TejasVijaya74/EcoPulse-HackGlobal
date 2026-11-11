@@ -1,7 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { Activity, BatteryCharging, Coins, LayoutDashboard, Network, Sun } from "lucide-react";
 import useLiveTelemetry from "./hooks/useLiveTelemetry";
-import { errorMessage, getConfig, getCredits, getDashboard, getForecast, runSimulation } from "./services/api";
+import {
+  errorMessage,
+  getApiAccessToken,
+  getConfig,
+  getCredits,
+  getDashboard,
+  getForecast,
+  runSimulation,
+  setApiAccessToken,
+} from "./services/api";
 
 const Overview = lazy(() => import("./pages/Overview"));
 const Forecast = lazy(() => import("./pages/Forecast"));
@@ -14,7 +23,7 @@ const navigation = [
   ["forecast", "Forecast", Sun],
   ["twin", "Digital Twin", Network],
   ["simulation", "Simulation", Activity],
-  ["credits", "Community Credits", Coins],
+  ["credits", "Community Energy Bank", Coins],
 ];
 
 export default function App() {
@@ -27,6 +36,8 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
+  const [apiToken, setApiToken] = useState(getApiAccessToken);
+  const [tokenDraft, setTokenDraft] = useState(getApiAccessToken);
 
   const refresh = useCallback(async () => {
     try {
@@ -54,6 +65,20 @@ export default function App() {
   const applyTelemetryFallback = useCallback((data) => setDashboard(data), []);
   const { telemetry, connection } = useLiveTelemetry(applyTelemetryFallback);
 
+  const saveApiToken = (event) => {
+    event.preventDefault();
+    const token = tokenDraft.trim();
+    setApiAccessToken(token);
+    setApiToken(token);
+    setTokenDraft(token);
+  };
+
+  const clearApiToken = () => {
+    setApiAccessToken("");
+    setApiToken("");
+    setTokenDraft("");
+  };
+
   const handleSimulation = async (parameters) => {
     setRunning(true);
     setError("");
@@ -69,6 +94,8 @@ export default function App() {
         metrics: result.metrics,
         series: result.series,
         baseline: result.baseline,
+        optimization_comparison: result.optimization_comparison,
+        carbon_impact: result.carbon_impact,
       }));
       await Promise.all([
         getCredits().then(setCredits),
@@ -87,7 +114,7 @@ export default function App() {
     forecast: <Forecast forecast={forecast} />,
     twin: <DigitalTwin telemetry={telemetry} dashboard={dashboard} />,
     simulation: <Simulation config={config} result={simulation} running={running} onRun={handleSimulation} />,
-    credits: <Credits credits={credits} />,
+    credits: <Credits credits={credits} loading={loading} error={error} />,
   }[page];
 
   return (
@@ -114,7 +141,27 @@ export default function App() {
         <header className="topbar">
           <div className="mobile-brand"><BatteryCharging size={19} /> EcoPulse</div>
           <div className="breadcrumb">EcoPulse <span>/</span> {titles[page]}</div>
-          <div className={`api-state ${error ? "error" : ""}`}><span /> {error ? "Connection issue" : loading ? "Connecting" : "API connected"}</div>
+          <div className="topbar-actions">
+            <details className="api-access">
+              <summary>{apiToken ? "Access set" : "Set access"}</summary>
+              <form onSubmit={saveApiToken}>
+                <label htmlFor="api-access-token">Backend bearer token</label>
+                <input
+                  id="api-access-token"
+                  type="password"
+                  autoComplete="off"
+                  value={tokenDraft}
+                  onChange={(event) => setTokenDraft(event.target.value)}
+                />
+                <div>
+                  <button className="button primary" type="submit" disabled={!tokenDraft.trim()}>Use token</button>
+                  {apiToken && <button className="button secondary" type="button" onClick={clearApiToken}>Clear</button>}
+                </div>
+                <small>Kept in this tab only; protected requests verify it with the backend.</small>
+              </form>
+            </details>
+            <div className={`api-state ${error ? "error" : ""}`}><span /> {error ? "Connection issue" : loading ? "Connecting" : "API connected"}</div>
+          </div>
         </header>
         <div className="main-content">
           {error && <div className="error-banner" role="alert">{error}<button onClick={refresh}>Retry</button></div>}

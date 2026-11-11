@@ -8,6 +8,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from app.database import Base, engine
 from app.models import ConfigurationRecord, CreditTransaction, ModelTrainingRecord, SimulationRecord  # noqa: F401
+from app.rate_limits import ensure_rate_limit_storage
 
 logger = logging.getLogger(__name__)
 MIGRATION_FILE = Path(__file__).resolve().parents[1] / "migrations" / "versions" / "20261105_01_expand_credit_transaction_type.sql"
@@ -63,6 +64,8 @@ def apply_migrations(connection: Connection) -> None:
                 "PostgreSQL column 'credit_transactions.transaction_type' must be "
                 f"VARCHAR or TEXT, not {data_type!r}."
             )
+
+    ensure_rate_limit_storage(connection)
 
 
 def run_migrations(target_engine: Engine = engine) -> None:

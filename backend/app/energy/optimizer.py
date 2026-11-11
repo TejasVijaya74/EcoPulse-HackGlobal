@@ -28,6 +28,7 @@ def dispatch_interval(
     grid_available: bool = True,
     grid_import_limit_kw: float = 250.0,
     grid_export_limit_kw: float = 120.0,
+    storage_enabled: bool = True,
 ) -> DispatchResult:
     """Route energy deterministically; all flow values are interval kWh."""
     storage_loss = storage.apply_self_discharge(hours)
@@ -35,7 +36,8 @@ def dispatch_interval(
     charge_input = stored = discharged = removed = grid_import = grid_export = curtailed = 0.0
     if solar >= demand:
         surplus = solar - demand
-        charge_input, stored = storage.charge(surplus, hours)
+        if storage_enabled:
+            charge_input, stored = storage.charge(surplus, hours)
         remainder = max(0.0, surplus - charge_input)
         grid_export = min(remainder, grid_export_limit_kw * hours) if grid_available else 0.0
         curtailed = max(0.0, remainder - grid_export)
@@ -43,7 +45,8 @@ def dispatch_interval(
         state = "Charging" if charge_input > 0 else ("Exporting" if grid_export > 0 else "Surplus")
     else:
         deficit = demand - solar
-        discharged, removed = storage.discharge(deficit, hours)
+        if storage_enabled:
+            discharged, removed = storage.discharge(deficit, hours)
         remaining = max(0.0, deficit - discharged)
         grid_import = min(remaining, grid_import_limit_kw * hours) if grid_available else 0.0
         curtailed = 0.0
@@ -63,4 +66,3 @@ def dispatch_interval(
         credits_energy,
         state,
     )
-

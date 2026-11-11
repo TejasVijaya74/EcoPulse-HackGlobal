@@ -1,15 +1,39 @@
 import { useEffect, useState } from "react";
 import { Play, RotateCcw } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import ChartCard from "../components/ChartCard";
 
 const scenarios = [
   ["normal", "Normal conditions"],
   ["heatwave", "Heatwave"],
-  ["heavy_cloud", "Heavy cloud cover"],
+  ["heavy_cloud", "Increased cloud cover"],
   ["high_demand", "High demand"],
+  ["evening_peak", "Evening demand peak"],
   ["grid_outage", "Grid outage"],
   ["low_solar", "Low solar generation"],
+  ["solar_surplus", "Solar surplus"],
+  ["storage_constraints", "Storage constraints"],
 ];
+
+const scenarioDescriptions = {
+  normal: "Reference operation with configured weather, demand, grid, and storage settings.",
+  heavy_cloud: "Raises modeled cloud cover to at least 88%; solar availability is reduced.",
+  high_demand: "Raises modeled community demand by 35%.",
+  evening_peak: "Raises demand by 50% from 17:00 through 22:00 in the deterministic trace.",
+  grid_outage: "Disables grid imports and exports; any unmet demand is reported as unserved.",
+  low_solar: "Reduces modeled solar output by 58%.",
+  solar_surplus: "Uses 5% base cloud cover to model a high-solar-availability case.",
+  storage_constraints: "Halves configured storage charge and discharge power limits.",
+};
 
 export default function Simulation({ config, result, running, onRun }) {
   const [form, setForm] = useState(null);
@@ -40,6 +64,14 @@ export default function Simulation({ config, result, running, onRun }) {
   const metrics = result?.metrics || {};
   const baseline = result?.baseline || {};
   const normal = result?.normal_comparison?.metrics || {};
+  const optimization = result?.optimization_comparison;
+  const baselineMetrics = optimization?.baseline?.metrics;
+  const optimizedMetrics = optimization?.optimized?.metrics;
+  const scenarioComparison = [
+    { measure: "Grid imports", normal: normal.grid_imports_kwh, scenario: metrics.grid_imports_kwh },
+    { measure: "Grid exports", normal: normal.grid_exports_kwh, scenario: metrics.grid_exports_kwh },
+    { measure: "Unserved energy", normal: normal.unserved_energy_kwh, scenario: metrics.unserved_energy_kwh },
+  ];
   return (
     <div className="page-stack">
       <div className="page-heading">
@@ -55,6 +87,7 @@ export default function Simulation({ config, result, running, onRun }) {
             <select value={form.scenario} onChange={(event) => set("scenario", event.target.value)}>
               {scenarios.map(([key, title]) => <option value={key} key={key}>{title}</option>)}
             </select>
+            <small className="scenario-description">{scenarioDescriptions[form.scenario]}</small>
           </label>
           <label>Households
             <input type="number" min="1" max="5000" value={form.households} onChange={(event) => set("households", event.target.value)} />
@@ -89,7 +122,7 @@ export default function Simulation({ config, result, running, onRun }) {
 
       {result ? (
         <div className="results-section">
-          <div className="result-heading"><div><h2>{result.scenario_label} results</h2><p>48 hourly intervals · energy quantities in kWh unless noted.</p></div><strong>{new Date(result.created_at).toLocaleString()}</strong></div>
+          <div className="result-heading"><div><h2>{result.scenario_label} results</h2><p>{result.parameters?.duration_hours ?? 48} hourly intervals · energy quantities in kWh unless noted.</p></div><strong>{new Date(result.created_at).toLocaleString()}</strong></div>
           <div className="result-grid">
             <Result label="Grid imports" value={metrics.grid_imports_kwh} unit="kWh" />
             <Result label="Grid exports" value={metrics.grid_exports_kwh} unit="kWh" />
@@ -100,6 +133,19 @@ export default function Simulation({ config, result, running, onRun }) {
             <Result label="Unserved demand" value={metrics.unserved_energy_kwh} unit="kWh" />
           </div>
           <ChartCard title="Selected scenario vs normal" subtitle="Scenario impact with the same configuration and weather seed">
+            <div className="scenario-chart">
+              <ResponsiveContainer width="100%" height={250}>
+                <BarChart data={scenarioComparison} margin={{ top: 8, right: 12, left: -16, bottom: 0 }}>
+                  <CartesianGrid stroke="#edf0ed" vertical={false} />
+                  <XAxis dataKey="measure" tickLine={false} axisLine={false} />
+                  <YAxis tickLine={false} axisLine={false} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="normal" name="Normal operation" fill="#8095b5" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="scenario" name={result.scenario_label} fill="#39805c" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
             <div className="comparison-table">
               <div><strong>Measure</strong><strong>Normal</strong><strong>{result.scenario_label}</strong></div>
               <div><span>Grid imports</span><span>{normal.grid_imports_kwh} kWh</span><span>{metrics.grid_imports_kwh} kWh</span></div>
@@ -108,13 +154,23 @@ export default function Simulation({ config, result, running, onRun }) {
               <div><span>Unserved demand</span><span>{normal.unserved_energy_kwh} kWh</span><span>{metrics.unserved_energy_kwh} kWh</span></div>
             </div>
           </ChartCard>
-          <ChartCard title="Baseline vs optimized" subtitle="Baseline has no storage; optimized uses abstract flywheel storage">
+          <ChartCard
+            title="Baseline vs EcoPulse dispatch"
+            subtitle={optimization
+              ? `Matched ${optimization.shared_inputs.duration_hours}-hour runs · same initial storage (${optimization.shared_inputs.initial_storage_kwh} kWh) and random seed (${optimization.shared_inputs.random_seed}); baseline leaves storage idle`
+              : "Existing no-storage baseline comparison"}
+          >
             <div className="comparison-table">
-              <div><strong>Measure</strong><strong>No-storage baseline</strong><strong>Optimized operation</strong></div>
-              <div><span>Grid imports</span><span>{baseline.grid_imports_kwh} kWh</span><span>{metrics.grid_imports_kwh} kWh</span></div>
-              <div><span>Grid exports</span><span>{baseline.grid_exports_kwh} kWh</span><span>{metrics.grid_exports_kwh} kWh</span></div>
-              <div><span>Curtailed</span><span>{baseline.curtailed_energy_kwh} kWh</span><span>{metrics.curtailed_energy_kwh} kWh</span></div>
-              <div><span>Unserved demand</span><span>{baseline.unserved_energy_kwh} kWh</span><span>{metrics.unserved_energy_kwh} kWh</span></div>
+              <div><strong>Measure</strong><strong>{optimization ? "Idle-storage baseline" : "No-storage baseline"}</strong><strong>EcoPulse dispatch</strong></div>
+              <div><span>Solar generation</span><span>{baselineMetrics?.renewable_generated_kwh ?? metrics.renewable_generated_kwh} kWh</span><span>{optimizedMetrics?.renewable_generated_kwh ?? metrics.renewable_generated_kwh} kWh</span></div>
+              <div><span>Household consumption</span><span>{baselineMetrics?.household_consumption_kwh ?? metrics.household_consumption_kwh} kWh</span><span>{optimizedMetrics?.household_consumption_kwh ?? metrics.household_consumption_kwh} kWh</span></div>
+              <div><span>Initial / ending storage</span><span>{baselineMetrics?.initial_storage_kwh ?? 0} / {baselineMetrics?.ending_storage_kwh ?? 0} kWh</span><span>{optimizedMetrics?.initial_storage_kwh ?? metrics.initial_storage_kwh} / {optimizedMetrics?.ending_storage_kwh ?? metrics.ending_storage_kwh} kWh</span></div>
+              <div><span>Energy stored / discharged</span><span>{baselineMetrics?.energy_stored_kwh ?? 0} / {baselineMetrics?.energy_discharged_kwh ?? 0} kWh</span><span>{optimizedMetrics?.energy_stored_kwh ?? metrics.energy_stored_kwh} / {optimizedMetrics?.energy_discharged_kwh ?? metrics.energy_discharged_kwh} kWh</span></div>
+              <div><span>Grid imports / exports</span><span>{baselineMetrics?.grid_imports_kwh ?? baseline.grid_imports_kwh} / {baselineMetrics?.grid_exports_kwh ?? baseline.grid_exports_kwh} kWh</span><span>{optimizedMetrics?.grid_imports_kwh ?? metrics.grid_imports_kwh} / {optimizedMetrics?.grid_exports_kwh ?? metrics.grid_exports_kwh} kWh</span></div>
+              <div><span>Renewable utilization</span><span>{baselineMetrics?.renewable_utilization_percent ?? "—"}%</span><span>{optimizedMetrics?.renewable_utilization_percent ?? metrics.renewable_utilization_percent}%</span></div>
+              <div><span>Grid dependency</span><span>{baselineMetrics?.grid_dependency_percent ?? "—"}%</span><span>{optimizedMetrics?.grid_dependency_percent ?? metrics.grid_dependency_percent}%</span></div>
+              <div><span>Unserved / curtailed</span><span>{baselineMetrics?.unserved_energy_kwh ?? baseline.unserved_energy_kwh} / {baselineMetrics?.curtailed_energy_kwh ?? baseline.curtailed_energy_kwh} kWh</span><span>{optimizedMetrics?.unserved_energy_kwh ?? metrics.unserved_energy_kwh} / {optimizedMetrics?.curtailed_energy_kwh ?? metrics.curtailed_energy_kwh} kWh</span></div>
+              <div><span>Storage losses / balance error</span><span>{baselineMetrics?.storage_losses_kwh ?? "—"} / {baselineMetrics?.energy_balance_error_kwh ?? "—"} kWh</span><span>{optimizedMetrics?.storage_losses_kwh ?? metrics.storage_losses_kwh} / {optimizedMetrics?.energy_balance_error_kwh ?? metrics.energy_balance_error_kwh} kWh</span></div>
             </div>
           </ChartCard>
           <div className="notice">Stored and exported energy represent routed renewable surplus. Storage efficiency, self-discharge, capacity, and power limits are applied. Credits are a simulated incentive, not money.</div>

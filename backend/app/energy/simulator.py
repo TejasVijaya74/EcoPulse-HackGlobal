@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import numpy as np
 
@@ -14,10 +15,18 @@ SCENARIOS = {
     "high_demand": "High Demand",
     "grid_outage": "Grid Outage",
     "low_solar": "Low Solar Generation",
+    "evening_peak": "Evening Demand Peak",
+    "solar_surplus": "Solar Surplus",
+    "storage_constraints": "Storage Constraints",
 }
 
 
-def simulate(parameters: SimulationParameters, config: dict) -> dict:
+def simulate(
+    parameters: SimulationParameters,
+    config: dict,
+    *,
+    dispatch_strategy: Literal["optimized", "baseline"] = "optimized",
+) -> dict:
     overrides = parameters.model_dump(exclude_unset=True, exclude={"scenario", "duration_hours"})
     values = {**config, **overrides}
     scenario = parameters.scenario
@@ -32,6 +41,11 @@ def simulate(parameters: SimulationParameters, config: dict) -> dict:
         values["grid_available"] = False
     elif scenario == "low_solar":
         solar_factor = 0.42
+    elif scenario == "solar_surplus":
+        values["cloud_cover"] = 0.05
+    elif scenario == "storage_constraints":
+        values["max_charge_kw"] *= 0.5
+        values["max_discharge_kw"] *= 0.5
 
     data = generate_synthetic_data(
         days=max(2, int(np.ceil(parameters.duration_hours / 24)) + 1),
@@ -47,6 +61,9 @@ def simulate(parameters: SimulationParameters, config: dict) -> dict:
     temperatures = data["temperature"].to_numpy() + temperature_shift + (values["temperature_c"] - 22) * 0.35
     cooling_factor = 1 + np.maximum(temperatures - 25, 0) * 0.012
     demand = data["household_demand"].to_numpy() * values["demand_multiplier"] * demand_factor * cooling_factor
+    if scenario == "evening_peak":
+        evening_hours = data["timestamp"].dt.hour.isin((17, 18, 19, 20, 21, 22)).to_numpy()
+        demand *= np.where(evening_hours, 1.5, 1.0)
 
     storage = FlywheelStorage(
         capacity_kwh=values["storage_capacity_kwh"],
@@ -72,6 +89,7 @@ def simulate(parameters: SimulationParameters, config: dict) -> dict:
         "unserved_energy_kwh": 0.0,
         "community_credits": 0.0,
         "community_contribution_kwh": 0.0,
+        "initial_storage_kwh": initial_storage_kwh,
     }
     baseline_imports = baseline_exports = baseline_curtailment = baseline_unserved = optimized_unserved = 0.0
     credit_events = []
@@ -83,6 +101,7 @@ def simulate(parameters: SimulationParameters, config: dict) -> dict:
             grid_available=values["grid_available"],
             grid_import_limit_kw=values["grid_import_limit_kw"],
             grid_export_limit_kw=values["grid_export_limit_kw"],
+            storage_enabled=dispatch_strategy == "optimized",
         )
         baseline_net = float(solar_kw - demand_kw)
         if baseline_net < 0:
@@ -117,9 +136,14 @@ def simulate(parameters: SimulationParameters, config: dict) -> dict:
                 "net_balance_kw": round(flow.solar_kwh - flow.demand_kwh, 2),
                 "storage_level_kwh": round(storage.energy_kwh, 2),
                 "storage_soc_percent": round(storage.state_of_charge * 100, 1),
+                "energy_stored_kwh": round(flow.stored_kwh, 2),
+                "energy_discharged_kwh": round(flow.discharged_kwh, 2),
                 "grid_import_kwh": round(flow.grid_import_kwh, 2),
                 "grid_export_kwh": round(flow.grid_export_kwh, 2),
                 "curtailed_kwh": round(flow.curtailed_kwh, 2),
+                "unserved_energy_kwh": round(
+                    max(0.0, flow.demand_kwh - served_by_local - served_by_grid), 2
+                ),
                 "credits_generated": round(flow.credits_energy_kwh * values["credit_rate"], 2),
                 "operating_state": flow.state,
             }
@@ -159,6 +183,7 @@ def simulate(parameters: SimulationParameters, config: dict) -> dict:
     return {
         "scenario": scenario,
         "scenario_label": SCENARIOS[scenario],
+        "dispatch_strategy": dispatch_strategy,
         "simulated": True,
         "assumptions": {
             "model": "Abstract flywheel-based storage; simulated values only, not a deployed installation.",

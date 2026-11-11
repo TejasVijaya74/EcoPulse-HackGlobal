@@ -4,20 +4,42 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from sqlalchemy import desc
 
+from app.config import CORS_ORIGINS
 from app.database import SessionLocal
 from app.models import SimulationRecord
 from app.services.analytics import create_dashboard_preview
 from app.api.routes import current_config
 
 router = APIRouter()
+MAX_TELEMETRY_CONNECTIONS = 100
+MAX_TELEMETRY_CONNECTIONS_PER_CLIENT = 5
+_active_connections = 0
+_active_connections_by_client: dict[str, int] = {}
 
 
 @router.websocket("/ws/grid-telemetry")
 async def grid_telemetry(websocket: WebSocket) -> None:
-    await websocket.accept()
+    global _active_connections
+    origin = websocket.headers.get("origin")
+    if origin and origin not in CORS_ORIGINS:
+        await websocket.close(code=1008)
+        return
+
+    client_host = websocket.client.host if websocket.client else "unknown"
+    client_connections = _active_connections_by_client.get(client_host, 0)
+    if (
+        _active_connections >= MAX_TELEMETRY_CONNECTIONS
+        or client_connections >= MAX_TELEMETRY_CONNECTIONS_PER_CLIENT
+    ):
+        await websocket.close(code=1013)
+        return
+
+    _active_connections += 1
+    _active_connections_by_client[client_host] = client_connections + 1
     simulation_id = None
     sample_index = 0
     try:
+        await websocket.accept()
         while True:
             with SessionLocal() as db:
                 latest = db.query(SimulationRecord).order_by(desc(SimulationRecord.created_at)).first()
@@ -51,4 +73,11 @@ async def grid_telemetry(websocket: WebSocket) -> None:
             )
             await asyncio.sleep(1)
     except WebSocketDisconnect:
-        return
+        pass
+    finally:
+        _active_connections -= 1
+        remaining_connections = _active_connections_by_client[client_host] - 1
+        if remaining_connections:
+            _active_connections_by_client[client_host] = remaining_connections
+        else:
+            del _active_connections_by_client[client_host]

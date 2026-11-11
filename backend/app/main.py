@@ -11,11 +11,14 @@ from app.config import CORS_ORIGINS, DEFAULT_CONFIG, MODEL_DIR
 from app.database import Base, SessionLocal, engine
 from app.ml.train import TRAINING_DATA_VERSION, train_models
 from app.models import ConfigurationRecord, ModelTrainingRecord
+from app.rate_limits import ensure_rate_limit_storage
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        ensure_rate_limit_storage(connection)
     with SessionLocal() as db:
         if db.get(ConfigurationRecord, 1) is None:
             db.add(ConfigurationRecord(id=1, values_json=json.dumps(DEFAULT_CONFIG)))

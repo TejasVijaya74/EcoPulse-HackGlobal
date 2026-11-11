@@ -1,3 +1,4 @@
+import math
 import os
 from pathlib import Path
 
@@ -26,6 +27,30 @@ CORS_ORIGINS = tuple(
 WEATHER_LATITUDE = os.getenv("WEATHER_LATITUDE", "").strip()
 WEATHER_LONGITUDE = os.getenv("WEATHER_LONGITUDE", "").strip()
 WEATHER_TIMEZONE = os.getenv("WEATHER_TIMEZONE", "UTC").strip() or "UTC"
+WEATHERAPI_KEY = os.getenv("WEATHERAPI_KEY", "").strip()
+WEATHERAPI_BASE_URL = os.getenv(
+    "WEATHERAPI_BASE_URL", "https://api.weatherapi.com/v1"
+).strip().rstrip("/")
+WEATHERAPI_DEFAULT_LOCATION = os.getenv("WEATHERAPI_DEFAULT_LOCATION", "New Delhi").strip()
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
+GRID_EMISSIONS_FACTOR_KG_CO2_PER_KWH = float(
+    os.getenv("GRID_EMISSIONS_FACTOR_KG_CO2_PER_KWH", "0.716")
+)
+if not math.isfinite(GRID_EMISSIONS_FACTOR_KG_CO2_PER_KWH) or GRID_EMISSIONS_FACTOR_KG_CO2_PER_KWH < 0:
+    raise ValueError("GRID_EMISSIONS_FACTOR_KG_CO2_PER_KWH must be a finite non-negative number.")
+GRID_EMISSIONS_FACTOR_SOURCE = os.getenv(
+    "GRID_EMISSIONS_FACTOR_SOURCE",
+    "Central Electricity Authority (CEA), CO2 Baseline Database for the Indian Power Sector, Version 19.0",
+).strip()
+GRID_EMISSIONS_REPORTING_YEAR = os.getenv("GRID_EMISSIONS_REPORTING_YEAR", "2022-23").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+API_ACCESS_TOKEN = os.getenv("API_ACCESS_TOKEN", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+GROQ_API_BASE_URL = os.getenv(
+    "GROQ_API_BASE_URL", "https://api.groq.com/openai/v1"
+).strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
 
 DEFAULT_CONFIG = {
     "households": 60,

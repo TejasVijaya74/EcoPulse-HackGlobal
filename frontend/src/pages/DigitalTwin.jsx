@@ -21,7 +21,7 @@ export default function DigitalTwin({ telemetry, dashboard }) {
           <h1>Digital twin</h1>
           <p>Interactive 2D view of simulated energy flows across the community.</p>
         </div>
-        <span className="live-status"><span /> {telemetry ? "Live telemetry" : "REST data"}</span>
+        <span className="live-status"><span /> {telemetry ? "WebSocket · simulated values" : "REST · simulated values"}</span>
       </div>
       <section className="panel twin-panel">
         <div className="twin-flow">
@@ -43,4 +43,3 @@ export default function DigitalTwin({ telemetry, dashboard }) {
     </div>
   );
 }
-

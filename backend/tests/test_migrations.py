@@ -61,6 +61,10 @@ def test_sqlite_bootstrap_creates_40_character_transaction_type(tmp_path):
             for column in connection.exec_driver_sql("PRAGMA table_info(credit_transactions)")
             if column._mapping["name"] == "transaction_type"
         )
+        rate_limit_columns = {
+            column._mapping["name"]
+            for column in connection.exec_driver_sql("PRAGMA table_info(api_rate_limit_windows)")
+        }
         connection.execute(
             text(
                 "INSERT INTO credit_transactions "
@@ -77,6 +81,7 @@ def test_sqlite_bootstrap_creates_40_character_transaction_type(tmp_path):
         ).scalar_one()
 
     assert column._mapping["type"].upper() == "VARCHAR(40)"
+    assert {"bucket_key", "window_start", "hit_count"} <= rate_limit_columns
     assert saved == "community_contribution"
     test_engine.dispose()
 
