@@ -11,9 +11,7 @@
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: DATABASE_URL
-        fromDatabase:
-          name: ecopulse-preview-db
-          property: connectionString
+        sync: false
       - key: CORS_ORIGINS
         value: https://ecopulse-preview-frontend.onrender.com
       - key: WEATHER_LATITUDE
@@ -47,10 +45,3 @@
       - type: rewrite
         source: /*
         destination: /index.html
-
-databases:
-  - name: ecopulse-preview-db
-    databaseName: ecopulse_preview
-    user: ecopulse_preview
-    plan: free
-    postgresMajorVersion: "16"
