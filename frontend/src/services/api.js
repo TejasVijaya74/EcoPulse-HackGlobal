@@ -35,6 +35,12 @@ export const validateApiAccessToken = (token) =>
   api.get("/credits", { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.data);
 export const resetCommunityBank = () => api.post("/credits/reset").then((response) => response.data);
 export const runSimulation = (parameters) => api.post("/simulate", parameters).then((response) => response.data);
+
+export const getSimulationHistory = () =>
+  api.get("/simulation/history").then((response) => response.data);
+
+export const getSimulation = (simulationId) =>
+  api.get(`/simulation/${simulationId}`).then((response) => response.data);
 export const getEnergyIntelligence = (location) =>
   api.get("/intelligence/overview", { params: { location } }).then((response) => response.data);
 export const getEnergyResearch = (topic) =>
